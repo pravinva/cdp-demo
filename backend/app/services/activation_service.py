@@ -5,9 +5,7 @@ Activation Service - Multi-channel message delivery
 import uuid
 from datetime import datetime
 from typing import Optional
-from pyspark.sql import SparkSession
-
-from ..dependencies import get_spark_session
+from ..dependencies import get_workspace_client
 from ..config import get_settings
 
 settings = get_settings()
@@ -18,7 +16,8 @@ class ActivationService:
     
     def __init__(self, tenant_id: str):
         self.tenant_id = tenant_id
-        self.spark = get_spark_session()
+        self.w = get_workspace_client()
+        self.warehouse_id = settings.SQL_WAREHOUSE_ID or "4b9b953939869799"
     
     def send_email(
         self,
@@ -36,24 +35,40 @@ class ActivationService:
         
         # In production, integrate with SendGrid
         # For now, just record in database
-        self.spark.sql(f"""
+        campaign_val = "NULL" if not campaign_id else f"'{campaign_id}'"
+        journey_val = "NULL" if not journey_id else f"'{journey_id}'"
+        journey_step_val = "NULL" if not journey_step_id else f"'{journey_step_id}'"
+        sent_at_val = "current_timestamp()" if not scheduled_time else f"timestamp('{scheduled_time.isoformat()}')"
+        
+        insert_query = f"""
             INSERT INTO cdp_platform.core.deliveries
-            (delivery_id, tenant_id, customer_id, campaign_id, journey_id,
+            (delivery_id, tenant_id, customer_id, campaign_id, journey_id, journey_step_id,
              channel, sent_at, to_address, subject, message_preview, status)
             VALUES (
                 '{delivery_id}',
                 '{self.tenant_id}',
                 '{customer_id}',
-                {'NULL' if not campaign_id else "'" + campaign_id + "'"},
-                {'NULL' if not journey_id else "'" + journey_id + "'"},
+                {campaign_val},
+                {journey_val},
+                {journey_step_val},
                 'email',
-                {'current_timestamp()' if not scheduled_time else f"timestamp('{scheduled_time.isoformat()}')"},
-                '{to_email}',
-                '{subject.replace("'", "\\'")}',
-                '{body[:100].replace("'", "\\'")}',
+                {sent_at_val},
+                '{to_email.replace("'", "''")}',
+                '{subject.replace("'", "''")}',
+                '{body[:100].replace("'", "''")}',
                 'sent'
             )
-        """)
+        """
+        
+        try:
+            self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=insert_query,
+                wait_timeout="30s"
+            )
+        except Exception as e:
+            print(f"Error recording email delivery: {e}")
+            raise
         
         return delivery_id
     
@@ -72,23 +87,39 @@ class ActivationService:
         
         # In production, integrate with Twilio
         # For now, just record in database
-        self.spark.sql(f"""
+        campaign_val = "NULL" if not campaign_id else f"'{campaign_id}'"
+        journey_val = "NULL" if not journey_id else f"'{journey_id}'"
+        journey_step_val = "NULL" if not journey_step_id else f"'{journey_step_id}'"
+        sent_at_val = "current_timestamp()" if not scheduled_time else f"timestamp('{scheduled_time.isoformat()}')"
+        
+        insert_query = f"""
             INSERT INTO cdp_platform.core.deliveries
-            (delivery_id, tenant_id, customer_id, campaign_id, journey_id,
+            (delivery_id, tenant_id, customer_id, campaign_id, journey_id, journey_step_id,
              channel, sent_at, to_address, message_preview, status)
             VALUES (
                 '{delivery_id}',
                 '{self.tenant_id}',
                 '{customer_id}',
-                {'NULL' if not campaign_id else "'" + campaign_id + "'"},
-                {'NULL' if not journey_id else "'" + journey_id + "'"},
+                {campaign_val},
+                {journey_val},
+                {journey_step_val},
                 'sms',
-                {'current_timestamp()' if not scheduled_time else f"timestamp('{scheduled_time.isoformat()}')"},
-                '{to_phone}',
-                '{message[:100].replace("'", "\\'")}',
+                {sent_at_val},
+                '{to_phone.replace("'", "''")}',
+                '{message[:100].replace("'", "''")}',
                 'sent'
             )
-        """)
+        """
+        
+        try:
+            self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=insert_query,
+                wait_timeout="30s"
+            )
+        except Exception as e:
+            print(f"Error recording SMS delivery: {e}")
+            raise
         
         return delivery_id
 

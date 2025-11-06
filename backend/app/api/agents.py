@@ -4,10 +4,12 @@ Agent decision execution and analytics
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional
-from ..models.decision import AgentDecision, AgentDecisionCreate
-from ..dependencies import get_tenant_context, get_spark_session
+from typing import List, Optional, Dict, Any
+from ..models.decision import AgentDecision, AgentDecisionCreate, ToolCall
+from ..dependencies import get_tenant_context, get_workspace_client
 from ..services.agent_service import AgentService
+from ..config import get_settings
+from datetime import datetime
 
 router = APIRouter()
 
@@ -37,9 +39,12 @@ async def list_agent_decisions(
     customer_id: Optional[str] = Query(None),
     campaign_id: Optional[str] = Query(None),
     journey_id: Optional[str] = Query(None),
-    spark = Depends(get_spark_session)
+    w = Depends(get_workspace_client)
 ):
     """List agent decisions with filtering"""
+    
+    settings = get_settings()
+    warehouse_id = settings.SQL_WAREHOUSE_ID or "4b9b953939869799"
     
     where_clauses = [f"tenant_id = '{tenant_id}'"]
     
@@ -60,24 +65,54 @@ async def list_agent_decisions(
         LIMIT 100
     """
     
-    results = spark.sql(query).toPandas().to_dict('records')
-    
-    decisions = []
-    for row in results:
-        try:
-            row_dict = {k: float(v) if hasattr(v, '__float__') else v for k, v in row.items()}
-            # Convert tool_calls array if present
-            if 'tool_calls' in row_dict and row_dict['tool_calls']:
-                from ..models.decision import ToolCall
-                tool_calls = [
-                    ToolCall(**tc) if isinstance(tc, dict) else tc
-                    for tc in row_dict['tool_calls']
-                ]
-                row_dict['tool_calls'] = tool_calls
-            decisions.append(AgentDecision(**row_dict))
-        except Exception as e:
-            print(f"Error parsing decision: {e}")
-            continue
+    try:
+        response = w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=query,
+            wait_timeout="30s"
+        )
+        
+        decisions = []
+        if response.result and response.result.data_array:
+            columns = [col.name for col in response.manifest.schema.columns] if response.manifest and response.manifest.schema else []
+            
+            for row in response.result.data_array:
+                try:
+                    row_dict = {}
+                    for i, col_name in enumerate(columns):
+                        value = row[i] if i < len(row) else None
+                        # Handle datetime conversion
+                        if col_name in ['timestamp', 'scheduled_send_time']:
+                            if value:
+                                if isinstance(value, str):
+                                    try:
+                                        value = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                                    except:
+                                        value = None
+                                elif not isinstance(value, datetime):
+                                    value = None
+                        row_dict[col_name] = value
+                    
+                    # Handle tool_calls if present
+                    if 'tool_calls' in row_dict and row_dict['tool_calls']:
+                        tool_calls_list = row_dict['tool_calls']
+                        if isinstance(tool_calls_list, list):
+                            row_dict['tool_calls'] = [
+                                ToolCall(**tc) if isinstance(tc, dict) else tc
+                                for tc in tool_calls_list
+                            ]
+                        else:
+                            row_dict['tool_calls'] = []
+                    else:
+                        row_dict['tool_calls'] = []
+                    
+                    decisions.append(AgentDecision(**row_dict))
+                except Exception as e:
+                    print(f"Error parsing decision: {e}")
+                    continue
+    except Exception as e:
+        print(f"Error fetching decisions: {e}")
+        decisions = []
     
     return decisions
 
@@ -86,9 +121,12 @@ async def list_agent_decisions(
 async def get_agent_decision(
     decision_id: str,
     tenant_id: str = Depends(get_tenant_context),
-    spark = Depends(get_spark_session)
+    w = Depends(get_workspace_client)
 ):
     """Get a specific agent decision"""
+    
+    settings = get_settings()
+    warehouse_id = settings.SQL_WAREHOUSE_ID or "4b9b953939869799"
     
     query = f"""
         SELECT *
@@ -96,11 +134,167 @@ async def get_agent_decision(
         WHERE tenant_id = '{tenant_id}' AND decision_id = '{decision_id}'
     """
     
-    result = spark.sql(query).toPandas().to_dict('records')
+    try:
+        response = w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=query,
+            wait_timeout="30s"
+        )
+        
+        if not response.result or not response.result.data_array:
+            raise HTTPException(status_code=404, detail="Decision not found")
+        
+        columns = [col.name for col in response.manifest.schema.columns] if response.manifest and response.manifest.schema else []
+        row = response.result.data_array[0]
+        
+        row_dict = {}
+        for i, col_name in enumerate(columns):
+            value = row[i] if i < len(row) else None
+            # Handle datetime conversion
+            if col_name in ['timestamp', 'scheduled_send_time']:
+                if value:
+                    if isinstance(value, str):
+                        try:
+                            value = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                        except:
+                            value = None
+                    elif not isinstance(value, datetime):
+                        value = None
+            row_dict[col_name] = value
+        
+        # Handle tool_calls
+        if 'tool_calls' in row_dict and row_dict['tool_calls']:
+            tool_calls_list = row_dict['tool_calls']
+            if isinstance(tool_calls_list, list):
+                row_dict['tool_calls'] = [
+                    ToolCall(**tc) if isinstance(tc, dict) else tc
+                    for tc in tool_calls_list
+                ]
+            else:
+                row_dict['tool_calls'] = []
+        else:
+            row_dict['tool_calls'] = []
+        
+        return AgentDecision(**row_dict)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error fetching decision: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch decision: {str(e)}")
+
+
+@router.get("/metrics")
+async def get_agent_metrics(
+    tenant_id: str = Depends(get_tenant_context),
+    w = Depends(get_workspace_client)
+) -> Dict[str, Any]:
+    """Get agent performance metrics"""
     
-    if not result:
-        raise HTTPException(status_code=404, detail="Decision not found")
+    settings = get_settings()
+    warehouse_id = settings.SQL_WAREHOUSE_ID or "4b9b953939869799"
     
-    row_dict = {k: float(v) if hasattr(v, '__float__') else v for k, v in result[0].items()}
-    return AgentDecision(**row_dict)
+    query = f"""
+        SELECT 
+            COUNT(*) as total_decisions,
+            SUM(CASE WHEN action = 'contact' THEN 1 ELSE 0 END) as contact_decisions,
+            SUM(CASE WHEN action = 'skip' THEN 1 ELSE 0 END) as skip_decisions,
+            AVG(confidence_score) as avg_confidence_score,
+            AVG(execution_time_ms) as avg_execution_time_ms,
+            SUM(CASE WHEN converted = true THEN 1 ELSE 0 END) as conversions,
+            SUM(CASE WHEN opened = true THEN 1 ELSE 0 END) as opened,
+            SUM(CASE WHEN clicked = true THEN 1 ELSE 0 END) as clicked
+        FROM cdp_platform.core.agent_decisions
+        WHERE tenant_id = '{tenant_id}'
+    """
+    
+    try:
+        response = w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=query,
+            wait_timeout="30s"
+        )
+        
+        if not response.result or not response.result.data_array:
+            return {
+                "total_decisions": 0,
+                "contact_decisions": 0,
+                "skip_decisions": 0,
+                "avg_confidence_score": 0,
+                "avg_execution_time_ms": 0,
+                "conversion_rate": 0,
+                "open_rate": 0,
+                "click_rate": 0,
+                "decisions_by_channel": {},
+                "decisions_by_segment": {},
+                "top_reasons": [],
+            }
+        
+        columns = [col.name for col in response.manifest.schema.columns] if response.manifest and response.manifest.schema else []
+        row = response.result.data_array[0]
+        metrics_dict = {columns[i]: row[i] for i in range(len(columns))}
+        
+        total = int(metrics_dict.get('total_decisions', 0) or 0)
+        contact = int(metrics_dict.get('contact_decisions', 0) or 0)
+        conversions = int(metrics_dict.get('conversions', 0) or 0)
+        opened = int(metrics_dict.get('opened', 0) or 0)
+        clicked = int(metrics_dict.get('clicked', 0) or 0)
+        
+        # Get channel distribution
+        channel_query = f"""
+            SELECT channel, COUNT(*) as count
+            FROM cdp_platform.core.agent_decisions
+            WHERE tenant_id = '{tenant_id}' AND channel IS NOT NULL
+            GROUP BY channel
+        """
+        
+        channel_response = w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=channel_query,
+            wait_timeout="30s"
+        )
+        
+        decisions_by_channel = {}
+        if channel_response.result and channel_response.result.data_array:
+            channel_columns = [col.name for col in channel_response.manifest.schema.columns] if channel_response.manifest and channel_response.manifest.schema else []
+            for row in channel_response.result.data_array:
+                row_dict = {channel_columns[i]: row[i] for i in range(len(channel_columns))}
+                decisions_by_channel[row_dict.get('channel', 'unknown')] = int(row_dict.get('count', 0))
+        
+        # Get segment distribution
+        segment_query = f"""
+            SELECT customer_segment, COUNT(*) as count
+            FROM cdp_platform.core.agent_decisions
+            WHERE tenant_id = '{tenant_id}' AND customer_segment IS NOT NULL
+            GROUP BY customer_segment
+        """
+        
+        segment_response = w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=segment_query,
+            wait_timeout="30s"
+        )
+        
+        decisions_by_segment = {}
+        if segment_response.result and segment_response.result.data_array:
+            segment_columns = [col.name for col in segment_response.manifest.schema.columns] if segment_response.manifest and segment_response.manifest.schema else []
+            for row in segment_response.result.data_array:
+                row_dict = {segment_columns[i]: row[i] for i in range(len(segment_columns))}
+                decisions_by_segment[row_dict.get('customer_segment', 'unknown')] = int(row_dict.get('count', 0))
+        
+        return {
+            "total_decisions": total,
+            "contact_decisions": contact,
+            "skip_decisions": int(metrics_dict.get('skip_decisions', 0) or 0),
+            "avg_confidence_score": float(metrics_dict.get('avg_confidence_score', 0) or 0),
+            "avg_execution_time_ms": float(metrics_dict.get('avg_execution_time_ms', 0) or 0),
+            "conversion_rate": (conversions / contact * 100) if contact > 0 else 0,
+            "open_rate": (opened / contact * 100) if contact > 0 else 0,
+            "click_rate": (clicked / opened * 100) if opened > 0 else 0,
+            "decisions_by_channel": decisions_by_channel,
+            "decisions_by_segment": decisions_by_segment,
+            "top_reasons": [],  # Could be enhanced with reasoning_summary analysis
+        }
+    except Exception as e:
+        print(f"Error fetching metrics: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch metrics: {str(e)}")
 
