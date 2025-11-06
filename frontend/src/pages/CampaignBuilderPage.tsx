@@ -13,7 +13,7 @@ import {
   Grid,
 } from '@mui/material';
 import { Save } from '@mui/icons-material';
-import { campaignsApi } from '../../services/campaigns';
+import { campaignsApi } from '../services/campaigns';
 
 const CampaignBuilderPage: React.FC = () => {
   const navigate = useNavigate();

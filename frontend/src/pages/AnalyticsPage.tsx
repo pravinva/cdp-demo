@@ -13,7 +13,7 @@ import {
   Route,
 } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
-import { analyticsApi } from '../../services/analytics';
+import { analyticsApi } from '../services/analytics';
 
 const MetricCard: React.FC<{
   title: string;

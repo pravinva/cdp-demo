@@ -21,7 +21,7 @@ import {
 import { Search, Add, Edit, Visibility } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { customersApi, Customer } from '../../services/customers';
+import { customersApi, Customer } from '../services/customers';
 
 const CustomersPage: React.FC = () => {
   const navigate = useNavigate();

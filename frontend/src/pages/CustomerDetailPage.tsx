@@ -13,7 +13,7 @@ import {
 } from '@mui/material';
 import { ArrowBack } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
-import { customersApi } from '../../services/customers';
+import { customersApi } from '../services/customers';
 
 const CustomerDetailPage: React.FC = () => {
   const { customerId } = useParams<{ customerId: string }>();

@@ -18,7 +18,7 @@ import {
 import { Add, PlayArrow } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { campaignsApi, Campaign } from '../../services/campaigns';
+import { campaignsApi, Campaign } from '../services/campaigns';
 
 const CampaignsPage: React.FC = () => {
   const navigate = useNavigate();

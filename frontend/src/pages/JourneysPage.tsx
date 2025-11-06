@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Typography, Card, CardContent } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
-import { journeysApi } from '../../services/journeys';
+import { journeysApi } from '../services/journeys';
 
 const JourneysPage: React.FC = () => {
   const { data: journeys, isLoading } = useQuery({
