@@ -5,11 +5,30 @@ Handles authentication, database connections, etc.
 
 from fastapi import Depends, HTTPException, status, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from databricks.sdk import WorkspaceClient
-from pyspark.sql import SparkSession
-import mlflow
 from typing import Optional
 from .config import get_settings
+
+# Optional Databricks imports for local development
+try:
+    from databricks.sdk import WorkspaceClient
+    DATABRICKS_AVAILABLE = True
+except ImportError:
+    DATABRICKS_AVAILABLE = False
+    WorkspaceClient = None
+
+try:
+    from pyspark.sql import SparkSession
+    SPARK_AVAILABLE = True
+except ImportError:
+    SPARK_AVAILABLE = False
+    SparkSession = None
+
+try:
+    import mlflow
+    MLFLOW_AVAILABLE = True
+except ImportError:
+    MLFLOW_AVAILABLE = False
+    mlflow = None
 
 settings = get_settings()
 security = HTTPBearer()
@@ -18,10 +37,16 @@ security = HTTPBearer()
 _workspace_client = None
 _spark_session = None
 
-def get_workspace_client() -> WorkspaceClient:
+def get_workspace_client():
     """Get Databricks workspace client
     Will automatically use ~/.databrickscfg if host/token not provided
     """
+    if not DATABRICKS_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Databricks SDK not available. Install with: pip install databricks-sdk"
+        )
+    
     global _workspace_client
     if _workspace_client is None:
         if settings.DATABRICKS_HOST and settings.DATABRICKS_TOKEN:
@@ -35,10 +60,16 @@ def get_workspace_client() -> WorkspaceClient:
             _workspace_client = WorkspaceClient()
     return _workspace_client
 
-def get_spark_session() -> SparkSession:
+def get_spark_session():
     """Get or create Spark session
     Uses Databricks SQL warehouse connection from ~/.databrickscfg
     """
+    if not SPARK_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="PySpark not available. Install with: pip install pyspark"
+        )
+    
     global _spark_session
     if _workspace_client is None:
         get_workspace_client()  # Initialize client to get config
@@ -102,6 +133,10 @@ def setup_mlflow():
     """Configure MLflow tracking
     Uses Databricks MLflow if no explicit URI provided
     """
+    if not MLFLOW_AVAILABLE:
+        # MLflow not available, skip setup
+        return
+    
     if settings.MLFLOW_TRACKING_URI:
         mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
     else:
@@ -109,5 +144,9 @@ def setup_mlflow():
         # MLflow will use ~/.databrickscfg
         pass
     
-    mlflow.set_experiment(settings.MLFLOW_EXPERIMENT_NAME)
+    try:
+        mlflow.set_experiment(settings.MLFLOW_EXPERIMENT_NAME)
+    except Exception:
+        # Experiment creation may fail in local dev, that's okay
+        pass
 

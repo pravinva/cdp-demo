@@ -12,7 +12,7 @@ from pyspark.sql import SparkSession
 from ..models.decision import AgentDecision, ToolCall
 from ..dependencies import get_spark_session
 from ..config import get_settings
-from .tools import AgentTools
+from ..agents.tools import AgentTools
 
 settings = get_settings()
 
@@ -116,9 +116,6 @@ class AgentService:
                 subject = None
                 body = f"Hi {first_name}, we have a special offer for you!"
                 reasoning = f"Customer prefers SMS. Sending personalized SMS via {channel}."
-        else:
-            action = "skip"
-            reasoning = "Customer context analysis suggests skipping"
         
         # Create decision record
         decision = self._create_decision(
