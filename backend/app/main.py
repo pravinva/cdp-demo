@@ -77,42 +77,38 @@ async def health_check():
     }
 
 # Include routers
-from .api import journeys
+from .api import journeys, customers, campaigns, agents, analytics, identity
 
 app.include_router(
     journeys.router,
     prefix="/api/journeys",
     tags=["journeys"]
 )
-
-# TODO: Add other routers as they're implemented
-# from .api import customers, campaigns, agents, analytics, identity
-# 
-# app.include_router(
-#     customers.router,
-#     prefix="/api/customers",
-#     tags=["customers"]
-# )
-# app.include_router(
-#     campaigns.router,
-#     prefix="/api/campaigns",
-#     tags=["campaigns"]
-# )
-# app.include_router(
-#     agents.router,
-#     prefix="/api/agents",
-#     tags=["agents"]
-# )
-# app.include_router(
-#     analytics.router,
-#     prefix="/api/analytics",
-#     tags=["analytics"]
-# )
-# app.include_router(
-#     identity.router,
-#     prefix="/api/identity",
-#     tags=["identity"]
-# )
+app.include_router(
+    customers.router,
+    prefix="/api/customers",
+    tags=["customers"]
+)
+app.include_router(
+    campaigns.router,
+    prefix="/api/campaigns",
+    tags=["campaigns"]
+)
+app.include_router(
+    agents.router,
+    prefix="/api/agents",
+    tags=["agents"]
+)
+app.include_router(
+    analytics.router,
+    prefix="/api/analytics",
+    tags=["analytics"]
+)
+app.include_router(
+    identity.router,
+    prefix="/api/identity",
+    tags=["identity"]
+)
 
 # Root endpoint
 @app.get("/")

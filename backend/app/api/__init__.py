@@ -2,7 +2,7 @@
 API module - exports all API routers
 """
 
-from . import journeys
+from . import journeys, customers, campaigns, agents, analytics, identity
 
-__all__ = ['journeys']
+__all__ = ['journeys', 'customers', 'campaigns', 'agents', 'analytics', 'identity']
 
