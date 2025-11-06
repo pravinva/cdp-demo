@@ -32,35 +32,53 @@ class DatabricksAgent:
         self.model = settings.AGENT_MODEL  # Configurable via AGENT_MODEL in config
         
         # Initialize OpenAI client for Databricks Foundation Model API
-        # Uses OpenAI-compatible API endpoint
+        # The API endpoint format is: https://<workspace>/serving-endpoints/<model>/invocations
+        # But OpenAI client expects: https://<workspace>/serving-endpoints
         databricks_host = settings.DATABRICKS_HOST or os.environ.get("DATABRICKS_HOST")
         databricks_token = settings.DATABRICKS_TOKEN or os.environ.get("DATABRICKS_TOKEN")
         
-        if databricks_host and databricks_token:
-            # Use explicit credentials
-            self.client = OpenAI(
-                api_key=databricks_token,
-                base_url=f"{databricks_host}/serving-endpoints"
-            )
-        else:
-            # Try to get from workspace client config
-            # Databricks SDK will use ~/.databrickscfg
-            try:
-                # Get host from workspace client
-                host = self.w.config.host if hasattr(self.w.config, 'host') else None
-                token = self.w.config.token if hasattr(self.w.config, 'token') else None
-                
-                if host and token:
-                    self.client = OpenAI(
-                        api_key=token,
-                        base_url=f"{host}/serving-endpoints"
-                    )
-                else:
-                    # Fallback: will use environment or ~/.databrickscfg
+        try:
+            if databricks_host and databricks_token:
+                # Use explicit credentials
+                # Remove trailing slash if present
+                host = databricks_host.rstrip('/')
+                self.client = OpenAI(
+                    api_key=databricks_token,
+                    base_url=f"{host}/serving-endpoints"
+                )
+            else:
+                # Try to get from workspace client config
+                # Databricks SDK will use ~/.databrickscfg
+                try:
+                    # Get host from workspace client config
+                    host = getattr(self.w.config, 'host', None) if hasattr(self.w, 'config') else None
+                    token = getattr(self.w.config, 'token', None) if hasattr(self.w, 'config') else None
+                    
+                    if host and token:
+                        host = host.rstrip('/')
+                        self.client = OpenAI(
+                            api_key=token,
+                            base_url=f"{host}/serving-endpoints"
+                        )
+                    else:
+                        # Try environment variables as last resort
+                        env_host = os.environ.get("DATABRICKS_HOST")
+                        env_token = os.environ.get("DATABRICKS_TOKEN")
+                        if env_host and env_token:
+                            env_host = env_host.rstrip('/')
+                            self.client = OpenAI(
+                                api_key=env_token,
+                                base_url=f"{env_host}/serving-endpoints"
+                            )
+                        else:
+                            self.client = None
+                            print("Warning: Could not initialize OpenAI client. Set DATABRICKS_HOST and DATABRICKS_TOKEN.")
+                except Exception as e:
+                    print(f"Warning: Could not initialize OpenAI client from workspace config: {e}")
                     self.client = None
-            except Exception as e:
-                print(f"Warning: Could not initialize OpenAI client: {e}")
-                self.client = None
+        except Exception as e:
+            print(f"Warning: Error initializing OpenAI client: {e}")
+            self.client = None
     
     def analyze_and_decide(
         self,
