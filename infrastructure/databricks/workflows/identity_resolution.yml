@@ -1,0 +1,12 @@
+name: feature_sync
+tasks:
+  - task_key: sync_customer_features
+    description: Sync customer features for ML serving
+    python_wheel_task:
+      package_name: cdp_platform
+      entry_point: sync_customer_features
+    libraries:
+      - whl: ./backend/dist/cdp_platform-*.whl
+    max_retries: 2
+    timeout_seconds: 3600
+

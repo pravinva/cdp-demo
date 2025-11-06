@@ -1,0 +1,12 @@
+name: scheduled_deliveries
+tasks:
+  - task_key: process_scheduled_deliveries
+    description: Process scheduled message deliveries from queue
+    python_wheel_task:
+      package_name: cdp_platform
+      entry_point: process_scheduled_deliveries
+    libraries:
+      - whl: ./backend/dist/cdp_platform-*.whl
+    max_retries: 2
+    timeout_seconds: 1800
+

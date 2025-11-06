@@ -7,8 +7,37 @@ from fastapi import APIRouter, Depends, Query
 from typing import Optional, List
 from ..dependencies import get_tenant_context, get_spark_session
 from ..services.graph_query_service import GraphQueryService
+from ..services.identity_resolution_service import IdentityResolutionService
 
 router = APIRouter()
+
+
+@router.post("/resolve")
+async def run_identity_resolution(
+    tenant_id: str = Depends(get_tenant_context),
+    batch_size: int = Query(10000, ge=1, le=100000)
+):
+    """Run identity resolution on recent events"""
+    service = IdentityResolutionService(tenant_id)
+    result = service.run_identity_resolution(batch_size=batch_size)
+    return {
+        "status": "success",
+        "processed": result["processed"],
+        "match_groups_created": result["match_groups_created"]
+    }
+
+
+@router.post("/households/detect")
+async def detect_households(
+    tenant_id: str = Depends(get_tenant_context)
+):
+    """Detect households from customer data"""
+    service = IdentityResolutionService(tenant_id)
+    household_count = service.detect_households()
+    return {
+        "status": "success",
+        "households_detected": household_count
+    }
 
 
 @router.get("/graph/household/{customer_id}")
