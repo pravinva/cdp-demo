@@ -13,7 +13,8 @@ from ..models.journey import (
     JourneyProgressResponse,
     CustomerJourneyState
 )
-from ..dependencies import get_tenant_context, get_workspace_client
+from ..dependencies import get_tenant_context, get_workspace_client, get_user_id_from_context
+from ..auth import get_current_user
 from ..services.journey_orchestrator_service import JourneyOrchestratorService
 from ..config import get_settings
 import uuid
@@ -26,7 +27,7 @@ router = APIRouter()
 async def create_journey(
     journey_def: JourneyDefinitionCreate,
     tenant_id: str = Depends(get_tenant_context),
-    created_by: str = "system"  # TODO: Get from auth context
+    created_by: str = Depends(get_user_id_from_context)
 ):
     """Create a new journey definition"""
     orchestrator = JourneyOrchestratorService(tenant_id)

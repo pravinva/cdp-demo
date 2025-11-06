@@ -1,6 +1,6 @@
 """
 Agent Service - Core agent orchestration
-Integrates with Databricks Agent Framework or simulates agent behavior
+Integrates with Databricks Agent Framework using Foundation Model APIs
 """
 
 import uuid
@@ -12,6 +12,7 @@ from ..models.decision import AgentDecision, ToolCall
 from ..dependencies import get_workspace_client
 from ..config import get_settings
 from ..agents.tools import AgentTools
+from ..agents.databricks_agent import DatabricksAgent
 
 settings = get_settings()
 
@@ -19,7 +20,7 @@ settings = get_settings()
 class AgentService:
     """
     Agent Service that orchestrates agent decisions
-    For now, simulates agent behavior (can be replaced with Databricks Agent Framework)
+    Uses Databricks Foundation Model API for AI-powered decision making
     """
     
     def __init__(self, tenant_id: str):
@@ -28,6 +29,8 @@ class AgentService:
         self.settings = get_settings()
         self.warehouse_id = self.settings.SQL_WAREHOUSE_ID or "4b9b953939869799"
         self.tools = AgentTools(tenant_id)
+        # Use real Databricks Agent Framework
+        self.agent = DatabricksAgent(tenant_id)
     
     def analyze_and_decide(
         self,
@@ -36,127 +39,47 @@ class AgentService:
         journey_id: Optional[str] = None,
         journey_step_id: Optional[str] = None,
         agent_instructions: Optional[str] = None,
-        channels: Optional[List[str]] = None
+        channels: Optional[List[str]] = None,
+        campaign_goal: Optional[str] = None
     ) -> AgentDecision:
         """
-        Analyze customer and make decision
+        Analyze customer and make decision using Databricks Agent Framework
         Returns AgentDecision with action, reasoning, and generated content
         """
-        start_time = time.time()
-        
-        # Gather context using tools
-        tool_calls = []
-        
-        # 1. Get customer context
-        customer_context = self.tools.get_customer_context(customer_id)
-        tool_calls.append(ToolCall(
-            tool_name="get_customer_context",
-            parameters={"customer_id": customer_id},
-            result=str(customer_context)
-        ))
-        
-        if customer_context.get("error"):
-            # Customer not found
-            return self._create_decision(
-                customer_id=customer_id,
-                campaign_id=campaign_id,
-                journey_id=journey_id,
-                journey_step_id=journey_step_id,
-                action="skip",
-                reasoning_summary="Customer not found",
-                confidence_score=1.0,
-                execution_time_ms=int((time.time() - start_time) * 1000)
-            )
-        
-        # 2. Check communication fatigue
-        fatigue = self.tools.get_communication_fatigue(customer_id)
-        tool_calls.append(ToolCall(
-            tool_name="get_communication_fatigue",
-            parameters={"customer_id": customer_id},
-            result=str(fatigue)
-        ))
-        
-        # 3. Check consent
-        email_consent = customer_context.get('email_consent', False)
-        sms_consent = customer_context.get('sms_consent', False)
-        
-        # Decision logic (simplified - in production use actual LLM)
-        is_fatigued = fatigue.get('is_fatigued', False)
-        messages_last_7d = fatigue.get('messages_last_7d', 0)
-        
-        # Determine action
-        if is_fatigued or messages_last_7d > 3:
-            action = "skip"
-            reasoning = f"Customer is fatigued (messages_last_7d={messages_last_7d})"
-        elif not email_consent and not sms_consent:
-            action = "skip"
-            reasoning = "Customer has no consent for any channel"
-        else:
-            # Decide to contact
-            action = "contact"
-            
-            # Choose channel
-            preferred_channel = customer_context.get('preferred_channel', 'email')
-            if preferred_channel in (channels or ['email']):
-                channel = preferred_channel
-            elif channels:
-                channel = channels[0]
-            else:
-                channel = 'email' if email_consent else 'sms'
-            
-            # Generate personalized content (simplified)
-            first_name = customer_context.get('first_name', 'Customer')
-            segment = customer_context.get('segment', '')
-            churn_risk = customer_context.get('churn_risk_score', 0.5)
-            
-            if channel == 'email':
-                subject = f"We miss you, {first_name}!"
-                body = self._generate_email_body(customer_context, segment, churn_risk)
-                reasoning = f"Customer has good engagement scores. Personalized email sent via {channel}."
-            else:
-                subject = None
-                body = f"Hi {first_name}, we have a special offer for you!"
-                reasoning = f"Customer prefers SMS. Sending personalized SMS via {channel}."
-        
-        # Create decision record
-        decision = self._create_decision(
+        # Use Databricks Agent Framework
+        decision = self.agent.analyze_and_decide(
             customer_id=customer_id,
             campaign_id=campaign_id,
             journey_id=journey_id,
             journey_step_id=journey_step_id,
-            action=action,
-            channel=channel if action == 'contact' else None,
-            message_subject=subject if action == 'contact' else None,
-            message_body=body if action == 'contact' else None,
-            reasoning_summary=reasoning,
-            reasoning_details=f"Customer segment: {segment}, Churn risk: {churn_risk}, Fatigue: {is_fatigued}",
-            tool_calls=tool_calls,
-            confidence_score=0.85,
-            customer_segment=segment,
-            churn_risk=churn_risk,
-            execution_time_ms=int((time.time() - start_time) * 1000)
+            agent_instructions=agent_instructions,
+            channels=channels,
+            campaign_goal=campaign_goal
         )
         
         # If action is contact, trigger activation service
-        if action == 'contact' and channel:
+        if decision.action == 'contact' and decision.channel:
             from ..services.activation_service import ActivationService
             activation_service = ActivationService(self.tenant_id)
             
-            if channel == 'email':
+            # Get customer context for email/phone
+            customer_context = self.tools.get_customer_context(customer_id)
+            
+            if decision.channel == 'email':
                 delivery_id = activation_service.send_email(
                     customer_id=customer_id,
                     to_email=customer_context.get('email'),
-                    subject=subject,
-                    body=body,
+                    subject=decision.message_subject,
+                    body=decision.message_body,
                     campaign_id=campaign_id,
                     journey_id=journey_id,
                     journey_step_id=journey_step_id
                 )
-            elif channel == 'sms':
+            elif decision.channel == 'sms':
                 delivery_id = activation_service.send_sms(
                     customer_id=customer_id,
                     to_phone=customer_context.get('phone'),
-                    message=body,
+                    message=decision.message_body,
                     campaign_id=campaign_id,
                     journey_id=journey_id,
                     journey_step_id=journey_step_id

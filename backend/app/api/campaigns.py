@@ -6,7 +6,8 @@ Campaign management and analytics
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 from ..models.campaign import Campaign, CampaignCreate
-from ..dependencies import get_tenant_context, get_workspace_client
+from ..dependencies import get_tenant_context, get_workspace_client, get_user_id_from_context
+from ..auth import get_current_user
 from ..config import get_settings
 import uuid
 from datetime import datetime
@@ -19,7 +20,8 @@ router = APIRouter()
 async def create_campaign(
     campaign: CampaignCreate,
     tenant_id: str = Depends(get_tenant_context),
-    created_by: str = "system",  # TODO: Get from auth context
+    user: dict = Depends(get_current_user),
+    created_by: str = Depends(get_user_id_from_context),
     w = Depends(get_workspace_client)
 ):
     """Create a new campaign"""

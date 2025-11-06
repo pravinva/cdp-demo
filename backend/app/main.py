@@ -77,8 +77,13 @@ async def health_check():
     }
 
 # Include routers
-from .api import journeys, customers, campaigns, agents, analytics, identity
+from .api import journeys, customers, campaigns, agents, analytics, identity, auth
 
+app.include_router(
+    auth.router,
+    prefix="/api/auth",
+    tags=["authentication"]
+)
 app.include_router(
     journeys.router,
     prefix="/api/journeys",

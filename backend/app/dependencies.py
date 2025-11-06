@@ -10,6 +10,7 @@ from pyspark.sql import SparkSession
 import mlflow
 from typing import Optional
 from .config import get_settings
+from .auth import get_current_user, get_tenant_from_user, get_user_id_from_context
 
 settings = get_settings()
 security = HTTPBearer()
@@ -56,47 +57,35 @@ def get_spark_session() -> SparkSession:
         _spark_session = builder.getOrCreate()
     return _spark_session
 
-def get_tenant_context(x_tenant_id: Optional[str] = Header(None)) -> str:
+def get_tenant_context(
+    x_tenant_id: Optional[str] = Header(None),
+    user: Optional[dict] = Depends(get_current_user)
+) -> str:
     """
-    Extract tenant ID from request headers
-    In production, this would validate JWT and extract tenant from claims
+    Extract tenant ID from authenticated user or header (for backward compatibility)
+    Prefers JWT token tenant_id, falls back to header if provided
     """
-    if not x_tenant_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="X-Tenant-ID header is required"
-        )
-    return x_tenant_id
-
-async def verify_token(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-) -> dict:
-    """
-    Verify JWT token (simplified for demo)
-    In production, use proper JWT validation with databricks-sdk or custom auth
-    """
-    token = credentials.credentials
+    # First try to get from authenticated user
+    tenant_id = user.get("tenant_id") if user else None
     
-    # TODO: Implement proper JWT validation
-    # For now, accept any token in development
-    if settings.ENVIRONMENT == "development":
-        return {"user_id": "demo_user", "tenant_id": "demo_tenant"}
+    # Fallback to header for backward compatibility (deprecated)
+    if not tenant_id and x_tenant_id:
+        if settings.ENVIRONMENT == "development":
+            return x_tenant_id
+        else:
+            # In production, require JWT token
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="X-Tenant-ID header is deprecated. Use JWT token authentication."
+            )
     
-    # Production: validate token
-    try:
-        # Validate token and extract claims
-        payload = verify_jwt_token(token)
-        return payload
-    except Exception as e:
+    if not tenant_id:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials"
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant ID not found in authentication token"
         )
-
-def verify_jwt_token(token: str) -> dict:
-    """Validate JWT token"""
-    # Implement JWT validation logic
-    pass
+    
+    return tenant_id
 
 def setup_mlflow():
     """Configure MLflow tracking
