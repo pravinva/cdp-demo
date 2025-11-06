@@ -6,8 +6,11 @@ CRUD operations and customer 360 views
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 from ..models.customer import Customer, CustomerCreate, CustomerUpdate, Customer360, CustomerListResponse
-from ..dependencies import get_tenant_context, get_spark_session
+from ..dependencies import get_tenant_context, get_workspace_client
 from ..services.graph_query_service import GraphQueryService
+from ..config import get_settings
+from databricks.sdk.service.sql import StatementState
+from datetime import datetime
 import uuid
 
 router = APIRouter()
@@ -20,9 +23,12 @@ async def list_customers(
     search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=1000),
-    spark = Depends(get_spark_session)
+    w = Depends(get_workspace_client)
 ):
     """List customers with filtering and pagination"""
+    
+    settings = get_settings()
+    warehouse_id = settings.SQL_WAREHOUSE_ID or "4b9b953939869799"  # Fallback warehouse ID
     
     offset = (page - 1) * page_size
     
@@ -45,8 +51,19 @@ async def list_customers(
         FROM cdp_platform.core.customers
         WHERE {where_clause}
     """
-    total_result = spark.sql(count_query).collect()
-    total = total_result[0]['total'] if total_result else 0
+    
+    try:
+        count_response = w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=count_query,
+            wait_timeout="30s"
+        )
+        total = 0
+        if count_response.result and count_response.result.data_array:
+            total = int(count_response.result.data_array[0][0]) if count_response.result.data_array[0] else 0
+    except Exception as e:
+        print(f"Error getting count: {e}")
+        total = 0
     
     # Get customers
     query = f"""
@@ -57,18 +74,55 @@ async def list_customers(
         LIMIT {page_size} OFFSET {offset}
     """
     
-    results = spark.sql(query).toPandas().to_dict('records')
-    
-    # Convert to Customer models
-    customers = []
-    for row in results:
-        try:
-            # Handle decimal types
-            row_dict = {k: float(v) if hasattr(v, '__float__') else v for k, v in row.items()}
-            customers.append(Customer(**row_dict))
-        except Exception as e:
-            print(f"Error parsing customer: {e}")
-            continue
+    try:
+        response = w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=query,
+            wait_timeout="30s"
+        )
+        
+        # Parse results
+        customers = []
+        if response.result and response.result.data_array:
+            # Get column names from manifest
+            columns = [col.name for col in response.manifest.schema.columns] if response.manifest and response.manifest.schema else []
+            
+            for row in response.result.data_array:
+                try:
+                    row_dict = {}
+                    for i, col_name in enumerate(columns):
+                        value = row[i] if i < len(row) else None
+                        # Handle datetime conversion
+                        if col_name in ['created_at', 'updated_at', 'date_of_birth', 'first_purchase_date', 'last_purchase_date']:
+                            if value:
+                                if isinstance(value, str):
+                                    try:
+                                        value = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                                    except:
+                                        value = None
+                                elif not isinstance(value, datetime):
+                                    value = None
+                            # Provide defaults for required datetime fields
+                            if value is None:
+                                if col_name in ['created_at', 'updated_at']:
+                                    value = datetime.now()
+                        # Handle None values for required fields with defaults
+                        if col_name == 'preferred_language' and value is None:
+                            value = 'en'
+                        if col_name in ['email_consent', 'sms_consent', 'push_consent'] and value is None:
+                            value = False
+                        if col_name == 'total_purchases' and value is None:
+                            value = 0
+                        if col_name == 'registered_devices' and value is None:
+                            value = []
+                        row_dict[col_name] = value
+                    customers.append(Customer(**row_dict))
+                except Exception as e:
+                    print(f"Error parsing customer: {e}, row: {row[:5] if row else 'empty'}")
+                    continue
+    except Exception as e:
+        print(f"Error fetching customers: {e}")
+        customers = []
     
     return CustomerListResponse(
         customers=customers,
@@ -82,24 +136,39 @@ async def list_customers(
 async def get_customer_360(
     customer_id: str,
     tenant_id: str = Depends(get_tenant_context),
-    spark = Depends(get_spark_session)
+    w = Depends(get_workspace_client)
 ):
     """Get complete customer 360 view"""
+    
+    settings = get_settings()
+    warehouse_id = settings.SQL_WAREHOUSE_ID or "4b9b953939869799"
     
     # 1. Profile
     profile_query = f"""
         SELECT * FROM cdp_platform.core.customers
         WHERE tenant_id = '{tenant_id}' AND customer_id = '{customer_id}'
     """
-    profile_result = spark.sql(profile_query).toPandas().to_dict('records')
     
-    if not profile_result:
+    try:
+        profile_response = w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=profile_query,
+            wait_timeout="30s"
+        )
+        
+        if not profile_response.result or not profile_response.result.data_array:
+            raise HTTPException(status_code=404, detail="Customer not found")
+        
+        # Parse profile
+        columns = [col.name for col in profile_response.manifest.schema.columns] if profile_response.manifest and profile_response.manifest.schema else []
+        profile_row = profile_response.result.data_array[0]
+        profile_dict = {columns[i]: profile_row[i] for i in range(len(columns))}
+        profile = Customer(**profile_dict)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error fetching profile: {e}")
         raise HTTPException(status_code=404, detail="Customer not found")
-    
-    profile_dict = profile_result[0]
-    # Convert decimals to float
-    profile_dict = {k: float(v) if hasattr(v, '__float__') else v for k, v in profile_dict.items()}
-    profile = Customer(**profile_dict)
     
     # 2. Recent events
     events_query = f"""
@@ -110,16 +179,27 @@ async def get_customer_360(
         ORDER BY event_timestamp DESC
         LIMIT 50
     """
-    recent_events_df = spark.sql(events_query)
-    recent_events = [
-        {
-            'event_type': row['event_type'],
-            'event_timestamp': str(row['event_timestamp']),
-            'page_url': row['page_url'],
-            'properties': dict(row['properties']) if row['properties'] else {}
-        }
-        for row in recent_events_df.collect()
-    ]
+    
+    recent_events = []
+    try:
+        events_response = w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=events_query,
+            wait_timeout="30s"
+        )
+        
+        if events_response.result and events_response.result.data_array:
+            event_columns = [col.name for col in events_response.manifest.schema.columns] if events_response.manifest and events_response.manifest.schema else []
+            for row in events_response.result.data_array:
+                row_dict = {event_columns[i]: row[i] for i in range(len(event_columns))}
+                recent_events.append({
+                    'event_type': row_dict.get('event_type'),
+                    'event_timestamp': str(row_dict.get('event_timestamp', '')),
+                    'page_url': row_dict.get('page_url'),
+                    'properties': row_dict.get('properties') or {}
+                })
+    except Exception as e:
+        print(f"Error fetching events: {e}")
     
     # 3. Campaign history
     campaign_query = f"""
@@ -138,18 +218,29 @@ async def get_customer_360(
         ORDER BY d.sent_at DESC
         LIMIT 20
     """
-    campaign_history_df = spark.sql(campaign_query)
-    campaign_history = [
-        {
-            'campaign_name': row['campaign_name'],
-            'sent_at': str(row['sent_at']),
-            'channel': row['channel'],
-            'opened': bool(row['opened']) if row['opened'] is not None else False,
-            'clicked': bool(row['clicked']) if row['clicked'] is not None else False,
-            'converted': bool(row['converted']) if row['converted'] is not None else False
-        }
-        for row in campaign_history_df.collect()
-    ]
+    
+    campaign_history = []
+    try:
+        campaign_response = w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=campaign_query,
+            wait_timeout="30s"
+        )
+        
+        if campaign_response.result and campaign_response.result.data_array:
+            campaign_columns = [col.name for col in campaign_response.manifest.schema.columns] if campaign_response.manifest and campaign_response.manifest.schema else []
+            for row in campaign_response.result.data_array:
+                row_dict = {campaign_columns[i]: row[i] for i in range(len(campaign_columns))}
+                campaign_history.append({
+                    'campaign_name': row_dict.get('campaign_name'),
+                    'sent_at': str(row_dict.get('sent_at', '')),
+                    'channel': row_dict.get('channel'),
+                    'opened': bool(row_dict.get('opened')) if row_dict.get('opened') is not None else False,
+                    'clicked': bool(row_dict.get('clicked')) if row_dict.get('clicked') is not None else False,
+                    'converted': bool(row_dict.get('converted')) if row_dict.get('converted') is not None else False
+                })
+    except Exception as e:
+        print(f"Error fetching campaign history: {e}")
     
     # 4. Agent decisions
     decisions_query = f"""
@@ -166,19 +257,30 @@ async def get_customer_360(
         ORDER BY timestamp DESC
         LIMIT 10
     """
-    decisions_df = spark.sql(decisions_query)
-    agent_decisions = [
-        {
-            'decision_id': row['decision_id'],
-            'campaign_id': row['campaign_id'],
-            'action': row['action'],
-            'channel': row['channel'],
-            'reasoning_summary': row['reasoning_summary'],
-            'confidence_score': float(row['confidence_score']) if row['confidence_score'] else 0.0,
-            'timestamp': str(row['timestamp'])
-        }
-        for row in decisions_df.collect()
-    ]
+    
+    agent_decisions = []
+    try:
+        decisions_response = w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=decisions_query,
+            wait_timeout="30s"
+        )
+        
+        if decisions_response.result and decisions_response.result.data_array:
+            decision_columns = [col.name for col in decisions_response.manifest.schema.columns] if decisions_response.manifest and decisions_response.manifest.schema else []
+            for row in decisions_response.result.data_array:
+                row_dict = {decision_columns[i]: row[i] for i in range(len(decision_columns))}
+                agent_decisions.append({
+                    'decision_id': row_dict.get('decision_id'),
+                    'campaign_id': row_dict.get('campaign_id'),
+                    'action': row_dict.get('action'),
+                    'channel': row_dict.get('channel'),
+                    'reasoning_summary': row_dict.get('reasoning_summary'),
+                    'confidence_score': float(row_dict.get('confidence_score', 0)) if row_dict.get('confidence_score') else 0.0,
+                    'timestamp': str(row_dict.get('timestamp', ''))
+                })
+    except Exception as e:
+        print(f"Error fetching agent decisions: {e}")
     
     # 5. Household members (if applicable)
     household_members = None
@@ -199,13 +301,19 @@ async def get_customer_360(
 async def create_customer(
     customer: CustomerCreate,
     tenant_id: str = Depends(get_tenant_context),
-    spark = Depends(get_spark_session)
+    w = Depends(get_workspace_client)
 ):
     """Create new customer"""
+    
+    settings = get_settings()
+    warehouse_id = settings.SQL_WAREHOUSE_ID or "4b9b953939869799"
     
     customer_id = f"cust_{uuid.uuid4().hex[:8]}"
     
     # Insert into customers table
+    phone_val = "NULL" if not customer.phone else f"'{customer.phone}'"
+    segment_val = "NULL" if not customer.segment else f"'{customer.segment}'"
+    
     insert_query = f"""
         INSERT INTO cdp_platform.core.customers
         (customer_id, tenant_id, email, phone, first_name, last_name, 
@@ -214,19 +322,27 @@ async def create_customer(
             '{customer_id}',
             '{tenant_id}',
             '{customer.email}',
-            {'NULL' if not customer.phone else "'" + customer.phone + "'"},
+            {phone_val},
             '{customer.first_name}',
             '{customer.last_name}',
-            {'NULL' if not customer.segment else "'" + customer.segment + "'"},
+            {segment_val},
             current_timestamp(),
             current_timestamp()
         )
     """
     
-    spark.sql(insert_query)
+    try:
+        w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=insert_query,
+            wait_timeout="30s"
+        )
+    except Exception as e:
+        print(f"Error creating customer: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create customer: {str(e)}")
     
     # Return created customer
-    return await get_customer_360(customer_id, tenant_id, spark)
+    return await get_customer_360(customer_id, tenant_id, w)
 
 
 @router.patch("/{customer_id}", response_model=Customer)
@@ -234,9 +350,12 @@ async def update_customer(
     customer_id: str,
     updates: CustomerUpdate,
     tenant_id: str = Depends(get_tenant_context),
-    spark = Depends(get_spark_session)
+    w = Depends(get_workspace_client)
 ):
     """Update customer"""
+    
+    settings = get_settings()
+    warehouse_id = settings.SQL_WAREHOUSE_ID or "4b9b953939869799"
     
     # Build SET clause
     set_clauses = []
@@ -270,18 +389,39 @@ async def update_customer(
         WHERE tenant_id = '{tenant_id}' AND customer_id = '{customer_id}'
     """
     
-    spark.sql(update_query)
+    try:
+        w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=update_query,
+            wait_timeout="30s"
+        )
+    except Exception as e:
+        print(f"Error updating customer: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update customer: {str(e)}")
     
     # Return updated customer
-    profile_result = spark.sql(f"""
+    select_query = f"""
         SELECT * FROM cdp_platform.core.customers
         WHERE tenant_id = '{tenant_id}' AND customer_id = '{customer_id}'
-    """).toPandas().to_dict('records')
+    """
     
-    if not profile_result:
-        raise HTTPException(status_code=404, detail="Customer not found")
-    
-    profile_dict = profile_result[0]
-    profile_dict = {k: float(v) if hasattr(v, '__float__') else v for k, v in profile_dict.items()}
-    return Customer(**profile_dict)
+    try:
+        response = w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=select_query,
+            wait_timeout="30s"
+        )
+        
+        if not response.result or not response.result.data_array:
+            raise HTTPException(status_code=404, detail="Customer not found")
+        
+        columns = [col.name for col in response.manifest.schema.columns] if response.manifest and response.manifest.schema else []
+        profile_row = response.result.data_array[0]
+        profile_dict = {columns[i]: profile_row[i] for i in range(len(columns))}
+        return Customer(**profile_dict)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error fetching updated customer: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch updated customer: {str(e)}")
 

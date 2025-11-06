@@ -554,32 +554,13 @@ def create_tables(spark):
     
     print("\n✓ All tables created successfully!")
 
-def get_sql_warehouse_id():
-    """Get SQL warehouse ID from config or auto-detect"""
-    import sys
-    import os
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-    from app.config import get_settings
-    
-    settings = get_settings()
-    if settings.SQL_WAREHOUSE_ID:
-        return settings.SQL_WAREHOUSE_ID
-    
-    # Auto-detect: get first available warehouse
-    w = WorkspaceClient()
-    warehouses = list(w.warehouses.list())
-    if warehouses:
-        return warehouses[0].id
-    return None
-
 if __name__ == "__main__":
-    import sys
+    from pyspark.sql import SparkSession
     
-    # Setup catalog and schemas
+    spark = SparkSession.builder \
+        .appName("CDP Setup") \
+        .getOrCreate()
+    
     setup_unity_catalog()
-    
-    # For table creation, use create_tables_sql.py script instead
-    # This script only creates catalog and schemas
-    print("\n✓ Catalog and schemas created!")
-    print("To create tables, run: python3 scripts/create_tables_sql.py")
+    create_tables(spark)
 
