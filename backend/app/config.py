@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]
     
     # Agent Configuration
+    # Model name for Databricks Foundation Model API
+    # Examples:
+    #   - "databricks-meta-llama-3-1-70b-instruct" (Llama 3.1 70B)
+    #   - "databricks-meta-llama-3-3-70b-instruct" (Llama 3.3 70B)
+    #   - "databricks-mixtral-8x7b-instruct" (Mixtral 8x7B)
+    #   - Or any custom serving endpoint name
     AGENT_MODEL: str = "databricks-meta-llama-3-1-70b-instruct"
     AGENT_MAX_ITERATIONS: int = 10
     AGENT_TEMPERATURE: float = 0.7

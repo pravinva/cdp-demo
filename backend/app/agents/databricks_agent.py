@@ -5,10 +5,10 @@ Uses Databricks Foundation Model API for AI-powered decision making
 
 import json
 import time
+import os
 from typing import Optional, List, Dict, Any
 from databricks.sdk import WorkspaceClient
-# Note: When using real Foundation Model API, import:
-# from databricks.sdk.service.serving import ChatCompletionRequest, ChatMessage, ChatMessageRole
+from openai import OpenAI
 from ..dependencies import get_workspace_client
 from ..config import get_settings
 from ..agents.tools import AgentTools
@@ -29,7 +29,38 @@ class DatabricksAgent:
         self.w = get_workspace_client()
         self.settings = get_settings()
         self.tools = AgentTools(tenant_id)
-        self.model = settings.AGENT_MODEL
+        self.model = settings.AGENT_MODEL  # Configurable via AGENT_MODEL in config
+        
+        # Initialize OpenAI client for Databricks Foundation Model API
+        # Uses OpenAI-compatible API endpoint
+        databricks_host = settings.DATABRICKS_HOST or os.environ.get("DATABRICKS_HOST")
+        databricks_token = settings.DATABRICKS_TOKEN or os.environ.get("DATABRICKS_TOKEN")
+        
+        if databricks_host and databricks_token:
+            # Use explicit credentials
+            self.client = OpenAI(
+                api_key=databricks_token,
+                base_url=f"{databricks_host}/serving-endpoints"
+            )
+        else:
+            # Try to get from workspace client config
+            # Databricks SDK will use ~/.databrickscfg
+            try:
+                # Get host from workspace client
+                host = self.w.config.host if hasattr(self.w.config, 'host') else None
+                token = self.w.config.token if hasattr(self.w.config, 'token') else None
+                
+                if host and token:
+                    self.client = OpenAI(
+                        api_key=token,
+                        base_url=f"{host}/serving-endpoints"
+                    )
+                else:
+                    # Fallback: will use environment or ~/.databrickscfg
+                    self.client = None
+            except Exception as e:
+                print(f"Warning: Could not initialize OpenAI client: {e}")
+                self.client = None
     
     def analyze_and_decide(
         self,
@@ -128,57 +159,64 @@ class DatabricksAgent:
         execution_time_ms: int
     ) -> AgentDecision:
         """
-        Call Databricks Foundation Model API for decision making
-        
-        Note: To use real LLM, deploy a serving endpoint or use Foundation Model API.
-        For now, uses intelligent rule-based decisions that follow the agent prompt structure.
+        Call Databricks Foundation Model API (Llama 70B) for decision making
+        Model is configurable via AGENT_MODEL in config file
         """
         
-        # TODO: In production, implement actual LLM call:
-        # Option 1: Deploy serving endpoint and call it
-        # Option 2: Use Databricks Foundation Model API directly via SDK
-        # Option 3: Use databricks-agents SDK if available
+        if not self.client:
+            print("Warning: OpenAI client not initialized, using fallback decision")
+            return self._fallback_decision(
+                customer_id=customer_id,
+                customer_context={},
+                fatigue={},
+                campaign_id=campaign_id,
+                journey_id=journey_id,
+                journey_step_id=journey_step_id,
+                tool_calls=tool_calls,
+                execution_time_ms=execution_time_ms
+            )
         
-        # For now, use intelligent rule-based decision that mimics LLM reasoning
-        # This provides the structure and can be swapped with real LLM calls
-        decision_text = self._make_intelligent_decision_json(
-            system_prompt=system_prompt,
-            user_message=user_message
-        )
-        
-        # Parse decision from response
-        return self._parse_decision_response(
-            decision_text=decision_text,
-            customer_id=customer_id,
-            campaign_id=campaign_id,
-            journey_id=journey_id,
-            journey_step_id=journey_step_id,
-            tool_calls=tool_calls,
-            execution_time_ms=execution_time_ms
-        )
-    
-    def _make_intelligent_decision_json(
-        self,
-        system_prompt: str,
-        user_message: str
-    ) -> str:
-        """
-        Make intelligent decision following agent prompt guidelines
-        This mimics LLM reasoning and can be replaced with actual LLM call
-        """
-        # Parse customer context from user message
-        # In real implementation, LLM would parse this
-        # For now, extract key info and make intelligent decision
-        
-        # This is a placeholder that returns structured JSON decision
-        # In production, replace with actual LLM API call
-        return json.dumps({
-            "action": "contact",  # Would be determined by LLM
-            "channel": "email",   # Would be determined by LLM
-            "reasoning": "Intelligent rule-based decision following agent guidelines. In production, this would be LLM-generated.",
-            "subject": "Personalized offer",
-            "body": "Hi there, we have something special for you!"
-        })
+        try:
+            # Call Databricks Foundation Model API using OpenAI-compatible interface
+            # Model name is configurable via AGENT_MODEL setting
+            response = self.client.chat.completions.create(
+                model=self.model,  # e.g., "databricks-meta-llama-3-1-70b-instruct"
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message}
+                ],
+                temperature=self.settings.AGENT_TEMPERATURE,
+                max_tokens=2000,
+                response_format={"type": "json_object"}  # Request JSON response
+            )
+            
+            # Extract response content
+            decision_text = response.choices[0].message.content
+            
+            # Parse decision from LLM response
+            return self._parse_decision_response(
+                decision_text=decision_text,
+                customer_id=customer_id,
+                campaign_id=campaign_id,
+                journey_id=journey_id,
+                journey_step_id=journey_step_id,
+                tool_calls=tool_calls,
+                execution_time_ms=execution_time_ms
+            )
+            
+        except Exception as e:
+            print(f"Error calling Foundation Model API: {e}")
+            # Fallback to rule-based decision
+            return self._fallback_decision(
+                customer_id=customer_id,
+                customer_context={},
+                fatigue={},
+                campaign_id=campaign_id,
+                journey_id=journey_id,
+                journey_step_id=journey_step_id,
+                tool_calls=tool_calls,
+                execution_time_ms=execution_time_ms
+            )
     
     def _build_user_message(
         self,
@@ -212,6 +250,10 @@ Is Fatigued: {fatigue.get('is_fatigued', False)}
             message += f"\nAvailable Channels: {', '.join(channels)}"
         
         message += "\n\nMake a decision: Should we contact this customer? If yes, choose channel and generate personalized content."
+        message += "\n\nReturn your decision as a JSON object with the following structure:"
+        message += '\n{\n  "action": "contact" or "skip",\n  "channel": "email" or "sms" (if action is contact),'
+        message += '\n  "reasoning": "Your reasoning for this decision",\n  "subject": "Email subject" (if email),'
+        message += '\n  "body": "Message body"\n}'
         
         return message
     
