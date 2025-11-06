@@ -2,14 +2,14 @@ name: feature_sync
 description: Sync customer features for ML serving
 
 schedule:
-  quartz_cron_expression: "0 */15 * * * ?"  # Every 15 minutes
+  quartz_cron_expression: "0 0 0 * * ?"  # Once per day at midnight UTC (configurable via WORKFLOW_SCHEDULE_CRON)
   timezone_id: "UTC"
 
 tasks:
   - task_key: sync_customer_features
     description: Sync customer features for ML serving
     notebook_task:
-      notebook_path: /Workspace/Repos/cdp-demo/backend/scripts/workflows/feature_sync
+      notebook_path: /Workspace/Users/pravin.varma@databricks.com/cdp-demo/backend/scripts/workflows/feature_sync
       base_parameters:
         tenant_id: "demo_tenant"
     max_retries: 2

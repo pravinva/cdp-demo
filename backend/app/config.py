@@ -86,6 +86,16 @@ class Settings(BaseSettings):
     JOURNEY_CHECK_INTERVAL_SECONDS: int = 60  # How often to check for journeys to progress
     JOURNEY_MAX_WAIT_DAYS: int = 90  # Maximum wait time before auto-exit
     
+    # Workflow Scheduling
+    # Cron expression for workflow schedules (Quartz format)
+    # Default: once per day at midnight UTC ("0 0 0 * * ?")
+    # Examples:
+    #   - "0 0 0 * * ?" - Once per day at midnight UTC
+    #   - "0 */5 * * * ?" - Every 5 minutes
+    #   - "0 0 */4 * * ?" - Every 4 hours
+    #   - "0 0 0 * * MON" - Every Monday at midnight
+    WORKFLOW_SCHEDULE_CRON: str = "0 0 0 * * ?"  # Once per day at midnight UTC
+    
     class Config:
         env_file = ".env"
         case_sensitive = True

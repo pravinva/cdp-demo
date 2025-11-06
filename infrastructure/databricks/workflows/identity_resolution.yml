@@ -2,14 +2,14 @@ name: identity_resolution
 description: Process clickstream events and create match groups for identity resolution
 
 schedule:
-  quartz_cron_expression: "0 0 */4 * * ?"  # Every 4 hours
+  quartz_cron_expression: "0 0 0 * * ?"  # Once per day at midnight UTC (configurable via WORKFLOW_SCHEDULE_CRON)
   timezone_id: "UTC"
 
 tasks:
   - task_key: run_identity_resolution
     description: Process unmatched events and create match groups
     notebook_task:
-      notebook_path: /Workspace/Repos/cdp-demo/backend/scripts/workflows/identity_resolution
+      notebook_path: /Workspace/Users/pravin.varma@databricks.com/cdp-demo/backend/scripts/workflows/identity_resolution
       base_parameters:
         tenant_id: "demo_tenant"
     max_retries: 2

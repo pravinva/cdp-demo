@@ -16,16 +16,24 @@ from databricks.sdk.service.jobs import (
     JobSettings
 )
 
+# Import config to get workflow schedule
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from app.config import get_settings
+
 def deploy_workflows():
     """Deploy all workflows to Databricks"""
     w = WorkspaceClient()
+    settings = get_settings()
+    
+    # Get schedule from config (default: once per day at midnight UTC)
+    workflow_schedule = settings.WORKFLOW_SCHEDULE_CRON
     
     workflows = [
         {
             "name": "journey_orchestrator",
             "description": "Process customer journey states and advance customers through journeys",
-            "schedule": "0 */5 * * * ?",  # Every 5 minutes
-            "notebook_path": "/Workspace/Repos/cdp-demo/backend/scripts/workflows/journey_orchestrator",
+            "schedule": workflow_schedule,  # Configurable via WORKFLOW_SCHEDULE_CRON
+            "notebook_path": "/Workspace/Users/pravin.varma@databricks.com/cdp-demo/backend/scripts/workflows/journey_orchestrator",
             "timeout": 3600,
             "task_key": "process_journey_states",
             "base_parameters": {"tenant_id": "demo_tenant"}
@@ -33,8 +41,8 @@ def deploy_workflows():
         {
             "name": "identity_resolution",
             "description": "Process clickstream events and create match groups for identity resolution",
-            "schedule": "0 0 */4 * * ?",  # Every 4 hours
-            "notebook_path": "/Workspace/Repos/cdp-demo/backend/scripts/workflows/identity_resolution",
+            "schedule": workflow_schedule,  # Configurable via WORKFLOW_SCHEDULE_CRON
+            "notebook_path": "/Workspace/Users/pravin.varma@databricks.com/cdp-demo/backend/scripts/workflows/identity_resolution",
             "timeout": 3600,
             "task_key": "run_identity_resolution",
             "base_parameters": {"tenant_id": "demo_tenant"}
@@ -42,8 +50,8 @@ def deploy_workflows():
         {
             "name": "scheduled_deliveries",
             "description": "Process scheduled message deliveries and send them",
-            "schedule": "0 */5 * * * ?",  # Every 5 minutes
-            "notebook_path": "/Workspace/Repos/cdp-demo/backend/scripts/workflows/scheduled_deliveries",
+            "schedule": workflow_schedule,  # Configurable via WORKFLOW_SCHEDULE_CRON
+            "notebook_path": "/Workspace/Users/pravin.varma@databricks.com/cdp-demo/backend/scripts/workflows/scheduled_deliveries",
             "timeout": 1800,
             "task_key": "process_scheduled_deliveries",
             "base_parameters": {"tenant_id": "demo_tenant"}
@@ -51,8 +59,8 @@ def deploy_workflows():
         {
             "name": "feature_sync",
             "description": "Sync customer features for ML serving",
-            "schedule": "0 */15 * * * ?",  # Every 15 minutes
-            "notebook_path": "/Workspace/Repos/cdp-demo/backend/scripts/workflows/feature_sync",
+            "schedule": workflow_schedule,  # Configurable via WORKFLOW_SCHEDULE_CRON
+            "notebook_path": "/Workspace/Users/pravin.varma@databricks.com/cdp-demo/backend/scripts/workflows/feature_sync",
             "timeout": 3600,
             "task_key": "sync_customer_features",
             "base_parameters": {"tenant_id": "demo_tenant"}
@@ -116,6 +124,7 @@ def deploy_workflows():
             traceback.print_exc()
     
     print("\n✅ Workflow deployment complete!")
+    print(f"\n📅 Schedule: {workflow_schedule} (configurable via WORKFLOW_SCHEDULE_CRON)")
     print("\n📋 Deployed workflows:")
     for workflow in workflows:
         print(f"   • {workflow['name']} - {workflow['description']}")

@@ -7,8 +7,25 @@ Run this as a Databricks Workflow task
 import sys
 import os
 
-# Add backend to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../backend'))
+# Setup imports - handles both repo and workspace scenarios
+try:
+    from _import_helper import setup_imports
+    setup_imports()
+except:
+    # Fallback if helper not available
+    current_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
+    backend_path = os.path.join(current_dir, '../../backend')
+    if os.path.exists(backend_path):
+        sys.path.insert(0, os.path.abspath(backend_path))
+    # Also try workspace paths
+    for path in [
+        '/Workspace/Users/pravin.varma@databricks.com/cdp-demo/backend',
+        '/Workspace/Repos/cdp-demo/backend',
+        '/Workspace/cdp-demo/backend'
+    ]:
+        if os.path.exists(path):
+            sys.path.insert(0, path)
+            break
 
 from app.services.identity_resolution_service import IdentityResolutionService
 from app.config import get_settings

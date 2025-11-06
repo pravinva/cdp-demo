@@ -2,14 +2,14 @@ name: journey_orchestrator
 description: Process customer journey states and advance customers through journeys
 
 schedule:
-  quartz_cron_expression: "0 */5 * * * ?"  # Every 5 minutes
+  quartz_cron_expression: "0 0 0 * * ?"  # Once per day at midnight UTC (configurable via WORKFLOW_SCHEDULE_CRON)
   timezone_id: "UTC"
 
 tasks:
   - task_key: process_journey_states
     description: Process active journey states and advance customers through journeys
     notebook_task:
-      notebook_path: /Workspace/Repos/cdp-demo/backend/scripts/workflows/journey_orchestrator
+      notebook_path: /Workspace/Users/pravin.varma@databricks.com/cdp-demo/backend/scripts/workflows/journey_orchestrator
       base_parameters:
         tenant_id: "demo_tenant"
     max_retries: 2
