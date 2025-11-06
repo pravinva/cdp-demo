@@ -45,10 +45,21 @@ class Settings(BaseSettings):
     SENDGRID_API_KEY: Optional[str] = None
     SENDGRID_FROM_EMAIL: str = "noreply@cdp-platform.com"
     
+    # Email Testing Alternatives
+    EMAIL_TEST_MODE: str = "console"  # Options: "console", "mailtrap", "mailhog", "sendgrid", "ses"
+    MAILTRAP_API_TOKEN: Optional[str] = None  # For Mailtrap testing
+    MAILHOG_HOST: str = "localhost"  # For MailHog local testing
+    MAILHOG_PORT: int = 1025  # MailHog SMTP port
+    
     # SMS Provider (Twilio)
     TWILIO_ACCOUNT_SID: Optional[str] = None
     TWILIO_AUTH_TOKEN: Optional[str] = None
     TWILIO_FROM_NUMBER: Optional[str] = None
+    
+    # SMS Testing Alternatives
+    SMS_TEST_MODE: str = "console"  # Options: "console", "twilio_test", "twilio", "mocksms"
+    TWILIO_TEST_ACCOUNT_SID: Optional[str] = None  # Twilio test credentials
+    TWILIO_TEST_AUTH_TOKEN: Optional[str] = None
     
     # Push Notification (Firebase)
     FIREBASE_CREDENTIALS_PATH: Optional[str] = None

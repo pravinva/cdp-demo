@@ -4,6 +4,7 @@ Login and token management
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from typing import Optional
 from ..auth import create_access_token, verify_token, get_current_user
 from ..config import get_settings
