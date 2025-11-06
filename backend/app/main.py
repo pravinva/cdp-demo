@@ -76,13 +76,47 @@ async def health_check():
         "environment": settings.ENVIRONMENT
     }
 
+# Enhanced health check with system tables
+@app.get("/health/detailed")
+async def detailed_health_check():
+    """Detailed health check with System Tables integration"""
+    try:
+        from .services.system_tables import SystemTablesService
+        from .services.alerting import AlertingService
+        
+        system_tables = SystemTablesService()
+        alerting = AlertingService()
+        
+        health_summary = system_tables.get_health_summary()
+        alerts = alerting.check_all_alerts()
+        
+        return {
+            "status": "healthy" if alerts["total_alerts"] == 0 else "degraded",
+            "version": settings.APP_VERSION,
+            "environment": settings.ENVIRONMENT,
+            "system_health": health_summary,
+            "alerts": alerts
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "version": settings.APP_VERSION,
+            "environment": settings.ENVIRONMENT,
+            "error": str(e)
+        }
+
 # Include routers
-from .api import journeys, customers, campaigns, agents, analytics, identity, auth
+from .api import journeys, customers, campaigns, agents, analytics, identity, auth, monitoring
 
 app.include_router(
     auth.router,
     prefix="/api/auth",
     tags=["authentication"]
+)
+app.include_router(
+    monitoring.router,
+    prefix="/api/monitoring",
+    tags=["monitoring"]
 )
 app.include_router(
     journeys.router,
