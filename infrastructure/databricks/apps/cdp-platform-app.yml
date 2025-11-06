@@ -1,0 +1,61 @@
+name: cdp-platform
+description: Customer Data Platform with Agentic AI and Journey Orchestration
+
+# Backend configuration
+backend:
+  path: ./backend
+  dockerfile: ./backend/Dockerfile
+  port: 8000
+  
+  env:
+    # Databricks credentials - will use ~/.databrickscfg or workspace context
+    DATABRICKS_HOST: ${secrets/cdp/databricks_host}
+    DATABRICKS_TOKEN: ${secrets/cdp/databricks_token}
+    MLFLOW_TRACKING_URI: databricks
+    MLFLOW_EXPERIMENT_NAME: /cdp-platform/agent-decisions
+    
+    # Optional integrations
+    # SENDGRID_API_KEY: ${secrets/cdp/sendgrid_key}
+    # TWILIO_ACCOUNT_SID: ${secrets/cdp/twilio_sid}
+    # TWILIO_AUTH_TOKEN: ${secrets/cdp/twilio_token}
+    
+    SECRET_KEY: ${secrets/cdp/app_secret_key}
+    ENVIRONMENT: production
+  
+  resources:
+    cpu: "4"
+    memory: "8Gi"
+    
+  scale:
+    min_replicas: 2
+    max_replicas: 10
+    target_cpu_utilization: 70
+
+# Resources access
+resources:
+  - name: cdp_catalog
+    type: unity_catalog
+    catalog: cdp_platform
+    
+  - name: mlflow_experiment
+    type: mlflow_experiment
+    path: /cdp-platform/agent-decisions
+
+# Workflows (background jobs)
+workflows:
+  - name: identity_resolution
+    path: ./infrastructure/databricks/workflows/identity_resolution.yml
+    schedule: "0 */4 * * *"  # Every 4 hours
+    
+  - name: journey_orchestrator
+    path: ./infrastructure/databricks/workflows/journey_orchestrator.yml
+    schedule: "*/5 * * * *"  # Every 5 minutes - process journey states
+    
+  - name: scheduled_deliveries
+    path: ./infrastructure/databricks/workflows/scheduled_deliveries.yml
+    schedule: "*/5 * * * *"  # Every 5 minutes
+    
+  - name: feature_sync
+    path: ./infrastructure/databricks/workflows/feature_sync.yml
+    schedule: "*/5 * * * *"  # Every 5 minutes
+

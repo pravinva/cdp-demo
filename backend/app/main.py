@@ -76,9 +76,18 @@ async def health_check():
         "environment": settings.ENVIRONMENT
     }
 
-# Include routers (will be created)
-# from .api import customers, campaigns, agents, analytics, identity, journeys
+# Include routers
+from .api import journeys
 
+app.include_router(
+    journeys.router,
+    prefix="/api/journeys",
+    tags=["journeys"]
+)
+
+# TODO: Add other routers as they're implemented
+# from .api import customers, campaigns, agents, analytics, identity
+# 
 # app.include_router(
 #     customers.router,
 #     prefix="/api/customers",
@@ -103,11 +112,6 @@ async def health_check():
 #     identity.router,
 #     prefix="/api/identity",
 #     tags=["identity"]
-# )
-# app.include_router(
-#     journeys.router,
-#     prefix="/api/journeys",
-#     tags=["journeys"]
 # )
 
 # Root endpoint

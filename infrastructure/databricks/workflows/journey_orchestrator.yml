@@ -1,0 +1,25 @@
+name: journey_orchestrator
+imports:
+  - name: cdp_platform_utils
+    path: ./backend/app
+
+tasks:
+  - task_key: process_journey_states
+    description: Process active journey states and advance customers through journeys
+    python_wheel_task:
+      package_name: cdp_platform
+      entry_point: process_journey_states
+    libraries:
+      - whl: ./backend/dist/cdp_platform-*.whl
+    max_retries: 2
+    timeout_seconds: 3600
+
+# Alternative: Direct Python script
+# tasks:
+#   - task_key: process_journey_states
+#     python_wheel_task:
+#       package_name: cdp_platform
+#       entry_point: process_journey_states
+#     libraries:
+#       - whl: ./backend/dist/cdp_platform-*.whl
+

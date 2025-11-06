@@ -103,11 +103,29 @@ databricks-cdp-platform/
 ## Documentation
 
 See `docs/` directory for detailed documentation on:
-- Architecture
+- **Databricks Apps Architecture** (`docs/DATABRICKS_APPS.md`) - How APIs are exposed
+- **Deployment Guide** (`docs/DEPLOYMENT.md`) - How to deploy to Databricks
 - API documentation
 - User guides
 - Identity resolution
 - Journey orchestration
+
+## Deployment as Databricks App
+
+This platform is designed to run as a **Databricks App**, which provides:
+
+- ✅ **Automatic HTTPS URL**: `https://<workspace>.cloud.databricks.com/apps/cdp-platform`
+- ✅ **Workspace Authentication**: Built-in Databricks auth
+- ✅ **Direct Unity Catalog Access**: No separate database connections
+- ✅ **Auto-Scaling**: Handles traffic automatically
+- ✅ **Background Jobs**: Scheduled workflows for journey orchestration
+
+Deploy with:
+```bash
+databricks apps deploy --app-spec infrastructure/databricks/apps/cdp-platform-app.yml
+```
+
+See `docs/DATABRICKS_APPS.md` for complete architecture details.
 
 ## License
 
