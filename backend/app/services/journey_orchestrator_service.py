@@ -7,8 +7,6 @@ import json
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, current_timestamp, when, lit
 
 from ..models.journey import (
     JourneyDefinition,
@@ -18,7 +16,7 @@ from ..models.journey import (
     JourneyStepType,
     WaitCondition
 )
-from ..dependencies import get_spark_session
+from ..dependencies import get_workspace_client
 from ..config import get_settings
 from .agent_service import AgentService
 
@@ -39,7 +37,9 @@ class JourneyOrchestratorService:
     
     def __init__(self, tenant_id: str):
         self.tenant_id = tenant_id
-        self.spark = get_spark_session()
+        self.w = get_workspace_client()
+        self.settings = get_settings()
+        self.warehouse_id = self.settings.SQL_WAREHOUSE_ID or "4b9b953939869799"
         self.agent_service = AgentService(tenant_id)
     
     def create_journey(self, journey_def: JourneyDefinitionCreate, created_by: str) -> JourneyDefinition:
@@ -65,38 +65,62 @@ class JourneyOrchestratorService:
         )
         
         # Store in database
-        definition_json = journey.model_dump_json()
+        definition_json = journey.model_dump_json().replace("'", "''")
+        name = journey.name.replace("'", "''")
+        description = (journey.description or "").replace("'", "''")
         
-        self.spark.sql(f"""
+        insert_query = f"""
             INSERT INTO cdp_platform.core.journey_definitions
             (journey_id, tenant_id, name, description, definition_json, status, created_by, created_at, updated_at)
             VALUES (
                 '{journey_id}',
                 '{self.tenant_id}',
-                '{journey.name}',
-                '{journey.description or ""}',
+                '{name}',
+                '{description}',
                 '{definition_json}',
                 'draft',
                 '{created_by}',
                 current_timestamp(),
                 current_timestamp()
             )
-        """)
+        """
+        
+        try:
+            self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=insert_query,
+                wait_timeout="30s"
+            )
+        except Exception as e:
+            print(f"Error creating journey: {e}")
+            raise
         
         return journey
     
     def get_journey(self, journey_id: str) -> Optional[JourneyDefinition]:
         """Retrieve a journey definition"""
-        result = self.spark.sql(f"""
+        query = f"""
             SELECT definition_json
             FROM cdp_platform.core.journey_definitions
             WHERE tenant_id = '{self.tenant_id}' AND journey_id = '{journey_id}'
-        """).collect()
+        """
         
-        if not result:
+        try:
+            response = self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=query,
+                wait_timeout="30s"
+            )
+            
+            if not response.result or not response.result.data_array:
+                return None
+            
+            columns = [col.name for col in response.manifest.schema.columns] if response.manifest and response.manifest.schema else []
+            definition_json = response.result.data_array[0][0]
+            return JourneyDefinition.model_validate_json(definition_json)
+        except Exception as e:
+            print(f"Error getting journey: {e}")
             return None
-        
-        return JourneyDefinition.model_validate_json(result[0]['definition_json'])
     
     def update_journey(self, journey_id: str, updates: Dict[str, Any]) -> Optional[JourneyDefinition]:
         """Update a journey definition"""
@@ -121,25 +145,45 @@ class JourneyOrchestratorService:
         journey.updated_at = datetime.now()
         
         # Persist
-        definition_json = journey.model_dump_json()
-        self.spark.sql(f"""
+        definition_json = journey.model_dump_json().replace("'", "''")
+        update_query = f"""
             UPDATE cdp_platform.core.journey_definitions
             SET definition_json = '{definition_json}',
                 updated_at = current_timestamp()
             WHERE tenant_id = '{self.tenant_id}' AND journey_id = '{journey_id}'
-        """)
+        """
+        
+        try:
+            self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=update_query,
+                wait_timeout="30s"
+            )
+        except Exception as e:
+            print(f"Error updating journey: {e}")
+            raise
         
         return journey
     
     def activate_journey(self, journey_id: str) -> bool:
         """Activate a journey (change status to active)"""
-        self.spark.sql(f"""
+        update_query = f"""
             UPDATE cdp_platform.core.journey_definitions
             SET status = 'active',
                 updated_at = current_timestamp()
             WHERE tenant_id = '{self.tenant_id}' AND journey_id = '{journey_id}'
-        """)
-        return True
+        """
+        
+        try:
+            self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=update_query,
+                wait_timeout="30s"
+            )
+            return True
+        except Exception as e:
+            print(f"Error activating journey: {e}")
+            return False
     
     def enter_customers_to_journey(
         self,
@@ -162,19 +206,39 @@ class JourneyOrchestratorService:
         if customer_ids:
             customers_to_enter = customer_ids
         elif segment:
-            customers_df = self.spark.sql(f"""
+            query = f"""
                 SELECT customer_id
                 FROM cdp_platform.core.customers
                 WHERE tenant_id = '{self.tenant_id}' AND segment = '{segment}'
-            """)
-            customers_to_enter = [row['customer_id'] for row in customers_df.collect()]
+            """
+            customers_to_enter = []
+            try:
+                response = self.w.statement_execution.execute_statement(
+                    warehouse_id=self.warehouse_id,
+                    statement=query,
+                    wait_timeout="30s"
+                )
+                if response.result and response.result.data_array:
+                    customers_to_enter = [row[0] for row in response.result.data_array]
+            except Exception as e:
+                print(f"Error getting customers by segment: {e}")
         elif journey.entry_segment:
-            customers_df = self.spark.sql(f"""
+            query = f"""
                 SELECT customer_id
                 FROM cdp_platform.core.customers
                 WHERE tenant_id = '{self.tenant_id}' AND segment = '{journey.entry_segment}'
-            """)
-            customers_to_enter = [row['customer_id'] for row in customers_df.collect()]
+            """
+            customers_to_enter = []
+            try:
+                response = self.w.statement_execution.execute_statement(
+                    warehouse_id=self.warehouse_id,
+                    statement=query,
+                    wait_timeout="30s"
+                )
+                if response.result and response.result.data_array:
+                    customers_to_enter = [row[0] for row in response.result.data_array]
+            except Exception as e:
+                print(f"Error getting customers by entry_segment: {e}")
         else:
             raise ValueError("Must provide customer_ids or segment")
         
@@ -201,10 +265,40 @@ class JourneyOrchestratorService:
                 'exit_reason': None
             })
         
-        # Bulk insert
+        # Bulk insert - insert one by one (SQL Execution API doesn't support bulk insert easily)
         if states_to_insert:
-            states_df = self.spark.createDataFrame(states_to_insert)
-            states_df.write.format("delta").mode("append").saveAsTable("cdp_platform.core.customer_journey_states")
+            for state in states_to_insert:
+                steps_completed_json = json.dumps(state['steps_completed'])
+                insert_query = f"""
+                    INSERT INTO cdp_platform.core.customer_journey_states
+                    (state_id, tenant_id, customer_id, journey_id, current_step_id, status,
+                     waiting_for, wait_until, steps_completed, actions_taken,
+                     entered_at, last_action_at, completed_at, exit_reason)
+                    VALUES (
+                        '{state['state_id']}',
+                        '{state['tenant_id']}',
+                        '{state['customer_id']}',
+                        '{state['journey_id']}',
+                        '{state['current_step_id']}',
+                        '{state['status']}',
+                        NULL,
+                        NULL,
+                        ARRAY({','.join([f"'{s}'" for s in state['steps_completed']])}),
+                        '{state['actions_taken']}',
+                        current_timestamp(),
+                        current_timestamp(),
+                        NULL,
+                        NULL
+                    )
+                """
+                try:
+                    self.w.statement_execution.execute_statement(
+                        warehouse_id=self.warehouse_id,
+                        statement=insert_query,
+                        wait_timeout="30s"
+                    )
+                except Exception as e:
+                    print(f"Error inserting journey state: {e}")
         
         return len(states_to_insert)
     
@@ -224,26 +318,53 @@ class JourneyOrchestratorService:
         }
         
         # Get all active states
-        active_states_df = self.spark.sql(f"""
+        query = f"""
             SELECT state_id, customer_id, journey_id, current_step_id, status,
                    waiting_for, wait_until, steps_completed, actions_taken
             FROM cdp_platform.core.customer_journey_states
             WHERE tenant_id = '{self.tenant_id}'
             AND status IN ('active', 'waiting')
-        """)
+        """
         
-        active_states = active_states_df.collect()
+        active_states = []
+        try:
+            response = self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=query,
+                wait_timeout="30s"
+            )
+            if response.result and response.result.data_array:
+                columns = [col.name for col in response.manifest.schema.columns] if response.manifest and response.manifest.schema else []
+                for row in response.result.data_array:
+                    row_dict = {columns[i]: row[i] for i in range(len(columns))}
+                    # Handle datetime conversion
+                    if 'wait_until' in row_dict and row_dict['wait_until']:
+                        if isinstance(row_dict['wait_until'], str):
+                            try:
+                                row_dict['wait_until'] = datetime.fromisoformat(row_dict['wait_until'].replace('Z', '+00:00'))
+                            except:
+                                pass
+                    # Handle array conversion
+                    if 'steps_completed' in row_dict and isinstance(row_dict['steps_completed'], str):
+                        try:
+                            row_dict['steps_completed'] = json.loads(row_dict['steps_completed'])
+                        except:
+                            row_dict['steps_completed'] = []
+                    active_states.append(row_dict)
+        except Exception as e:
+            print(f"Error getting active states: {e}")
+            return stats
         
         for state_row in active_states:
             try:
-                journey = self.get_journey(state_row['journey_id'])
+                journey = self.get_journey(state_row.get('journey_id'))
                 if not journey:
                     continue
                 
-                step = self._find_step(journey, state_row['current_step_id'])
+                step = self._find_step(journey, state_row.get('current_step_id'))
                 if not step:
                     self._exit_journey(
-                        state_row['state_id'],
+                        state_row.get('state_id'),
                         "Invalid step_id"
                     )
                     stats['errors'] += 1
@@ -252,37 +373,37 @@ class JourneyOrchestratorService:
                 # Process based on step type
                 if step.step_type == JourneyStepType.AGENT_ACTION:
                     stats['agent_actions'] += self._execute_agent_step(
-                        state_row['state_id'],
-                        state_row['customer_id'],
+                        state_row.get('state_id'),
+                        state_row.get('customer_id'),
                         journey,
                         step
                     )
                 
                 elif step.step_type == JourneyStepType.WAIT:
                     stats['waits_checked'] += self._check_wait_step(
-                        state_row['state_id'],
-                        state_row['customer_id'],
+                        state_row.get('state_id'),
+                        state_row.get('customer_id'),
                         journey,
                         step,
-                        state_row['waiting_for'],
-                        state_row['wait_until']
+                        state_row.get('waiting_for'),
+                        state_row.get('wait_until')
                     )
                 
                 elif step.step_type == JourneyStepType.BRANCH:
                     stats['branches_evaluated'] += self._evaluate_branch(
-                        state_row['state_id'],
-                        state_row['customer_id'],
+                        state_row.get('state_id'),
+                        state_row.get('customer_id'),
                         journey,
                         step
                     )
                 
                 elif step.step_type == JourneyStepType.EXIT:
-                    self._exit_journey(state_row['state_id'], "Journey completed")
+                    self._exit_journey(state_row.get('state_id'), "Journey completed")
                     stats['completed'] += 1
                 
             except Exception as e:
-                print(f"Error processing state {state_row['state_id']}: {e}")
-                self._exit_journey(state_row['state_id'], f"Error: {str(e)}")
+                print(f"Error processing state {state_row.get('state_id')}: {e}")
+                self._exit_journey(state_row.get('state_id'), f"Error: {str(e)}")
                 stats['errors'] += 1
         
         return stats
@@ -468,7 +589,7 @@ class JourneyOrchestratorService:
         field, value = event_mapping[event_type]
         
         # Check deliveries table
-        result = self.spark.sql(f"""
+        query = f"""
             SELECT COUNT(*) as count
             FROM cdp_platform.core.deliveries d
             INNER JOIN cdp_platform.core.customer_journey_states cjs
@@ -477,106 +598,203 @@ class JourneyOrchestratorService:
             AND d.customer_id = '{customer_id}'
             AND d.journey_id = '{journey_id}'
             AND d.{field} = {value}
-        """).collect()
+        """
         
-        return result[0]['count'] > 0 if result else False
+        try:
+            response = self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=query,
+                wait_timeout="30s"
+            )
+            if response.result and response.result.data_array:
+                count = int(response.result.data_array[0][0] or 0)
+                return count > 0
+        except Exception as e:
+            print(f"Error checking event: {e}")
+        
+        return False
     
     def _advance_to_step(self, state_id: str, next_step_id: str):
         """Advance journey state to next step"""
-        self.spark.sql(f"""
+        update_query = f"""
             UPDATE cdp_platform.core.customer_journey_states
             SET current_step_id = '{next_step_id}',
                 status = 'active',
                 last_action_at = current_timestamp()
             WHERE tenant_id = '{self.tenant_id}' AND state_id = '{state_id}'
-        """)
+        """
+        
+        try:
+            self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=update_query,
+                wait_timeout="30s"
+            )
+        except Exception as e:
+            print(f"Error advancing step: {e}")
     
     def _set_wait_state(self, state_id: str, waiting_for: str, wait_until: Optional[datetime]):
         """Set journey state to waiting"""
         wait_until_str = f"timestamp('{wait_until.isoformat()}')" if wait_until else "NULL"
         
-        self.spark.sql(f"""
+        update_query = f"""
             UPDATE cdp_platform.core.customer_journey_states
             SET status = 'waiting',
                 waiting_for = '{waiting_for}',
                 wait_until = {wait_until_str},
                 last_action_at = current_timestamp()
             WHERE tenant_id = '{self.tenant_id}' AND state_id = '{state_id}'
-        """)
+        """
+        
+        try:
+            self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=update_query,
+                wait_timeout="30s"
+            )
+        except Exception as e:
+            print(f"Error setting wait state: {e}")
     
     def _clear_wait_state(self, state_id: str):
         """Clear wait state"""
-        self.spark.sql(f"""
+        update_query = f"""
             UPDATE cdp_platform.core.customer_journey_states
             SET status = 'active',
                 waiting_for = NULL,
                 wait_until = NULL,
                 last_action_at = current_timestamp()
             WHERE tenant_id = '{self.tenant_id}' AND state_id = '{state_id}'
-        """)
+        """
+        
+        try:
+            self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=update_query,
+                wait_timeout="30s"
+            )
+        except Exception as e:
+            print(f"Error clearing wait state: {e}")
     
     def _mark_step_completed(self, state_id: str, step_id: str):
         """Mark a step as completed"""
         state = self._get_journey_state(state_id)
         if state:
             completed_steps = state.get('steps_completed', [])
+            if isinstance(completed_steps, str):
+                try:
+                    completed_steps = json.loads(completed_steps)
+                except:
+                    completed_steps = []
             if step_id not in completed_steps:
                 completed_steps.append(step_id)
-                completed_steps_json = json.dumps(completed_steps)
-                self.spark.sql(f"""
+                update_query = f"""
                     UPDATE cdp_platform.core.customer_journey_states
                     SET steps_completed = ARRAY({','.join([f"'{s}'" for s in completed_steps])}),
                         last_action_at = current_timestamp()
                     WHERE tenant_id = '{self.tenant_id}' AND state_id = '{state_id}'
-                """)
+                """
+                try:
+                    self.w.statement_execution.execute_statement(
+                        warehouse_id=self.warehouse_id,
+                        statement=update_query,
+                        wait_timeout="30s"
+                    )
+                except Exception as e:
+                    print(f"Error marking step completed: {e}")
     
     def _add_action(self, state_id: str, action: Dict[str, Any]):
         """Add action to history"""
         state = self._get_journey_state(state_id)
         if state:
-            actions = json.loads(state.get('actions_taken', '[]'))
+            actions_taken_str = state.get('actions_taken', '[]')
+            if isinstance(actions_taken_str, str):
+                try:
+                    actions = json.loads(actions_taken_str)
+                except:
+                    actions = []
+            else:
+                actions = []
             actions.append(action)
-            actions_json = json.dumps(actions)
-            self.spark.sql(f"""
+            actions_json = json.dumps(actions).replace("'", "''")
+            update_query = f"""
                 UPDATE cdp_platform.core.customer_journey_states
                 SET actions_taken = '{actions_json}',
                     last_action_at = current_timestamp()
                 WHERE tenant_id = '{self.tenant_id}' AND state_id = '{state_id}'
-            """)
+            """
+            try:
+                self.w.statement_execution.execute_statement(
+                    warehouse_id=self.warehouse_id,
+                    statement=update_query,
+                    wait_timeout="30s"
+                )
+            except Exception as e:
+                print(f"Error adding action: {e}")
     
     def _exit_journey(self, state_id: str, exit_reason: str):
         """Exit a customer from journey"""
-        self.spark.sql(f"""
+        exit_reason_escaped = exit_reason.replace("'", "''")
+        update_query = f"""
             UPDATE cdp_platform.core.customer_journey_states
             SET status = 'exited',
-                exit_reason = '{exit_reason}',
+                exit_reason = '{exit_reason_escaped}',
                 completed_at = current_timestamp(),
                 last_action_at = current_timestamp()
             WHERE tenant_id = '{self.tenant_id}' AND state_id = '{state_id}'
-        """)
+        """
+        
+        try:
+            self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=update_query,
+                wait_timeout="30s"
+            )
+        except Exception as e:
+            print(f"Error exiting journey: {e}")
     
     def _get_journey_state(self, state_id: str) -> Optional[Dict]:
         """Get journey state"""
-        result = self.spark.sql(f"""
+        query = f"""
             SELECT *
             FROM cdp_platform.core.customer_journey_states
             WHERE tenant_id = '{self.tenant_id}' AND state_id = '{state_id}'
-        """).collect()
+        """
         
-        if result:
-            return result[0].asDict()
+        try:
+            response = self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=query,
+                wait_timeout="30s"
+            )
+            
+            if response.result and response.result.data_array:
+                columns = [col.name for col in response.manifest.schema.columns] if response.manifest and response.manifest.schema else []
+                row = response.result.data_array[0]
+                row_dict = {columns[i]: row[i] for i in range(len(columns))}
+                
+                # Handle array conversion
+                if 'steps_completed' in row_dict and isinstance(row_dict['steps_completed'], str):
+                    try:
+                        row_dict['steps_completed'] = json.loads(row_dict['steps_completed'])
+                    except:
+                        row_dict['steps_completed'] = []
+                
+                return row_dict
+        except Exception as e:
+            print(f"Error getting journey state: {e}")
+        
         return None
     
     def get_journey_progress(self, journey_id: str) -> Dict[str, Any]:
         """Get journey progress analytics"""
-        result = self.spark.sql(f"""
+        query = f"""
             SELECT 
                 status,
                 COUNT(*) as count
             FROM cdp_platform.core.customer_journey_states
             WHERE tenant_id = '{self.tenant_id}' AND journey_id = '{journey_id}'
             GROUP BY status
-        """).collect()
+        """
         
         stats = {
             'active': 0,
@@ -586,10 +804,23 @@ class JourneyOrchestratorService:
             'error': 0
         }
         
-        for row in result:
-            status = row['status']
-            if status in stats:
-                stats[status] = row['count']
+        try:
+            response = self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=query,
+                wait_timeout="30s"
+            )
+            
+            if response.result and response.result.data_array:
+                columns = [col.name for col in response.manifest.schema.columns] if response.manifest and response.manifest.schema else []
+                for row in response.result.data_array:
+                    row_dict = {columns[i]: row[i] for i in range(len(columns))}
+                    status = row_dict.get('status')
+                    count = int(row_dict.get('count', 0) or 0)
+                    if status in stats:
+                        stats[status] = count
+        except Exception as e:
+            print(f"Error getting journey progress: {e}")
         
         return stats
 

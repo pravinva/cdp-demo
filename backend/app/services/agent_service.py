@@ -7,10 +7,9 @@ import uuid
 import time
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pyspark.sql import SparkSession
 
 from ..models.decision import AgentDecision, ToolCall
-from ..dependencies import get_spark_session
+from ..dependencies import get_workspace_client
 from ..config import get_settings
 from ..agents.tools import AgentTools
 
@@ -25,7 +24,9 @@ class AgentService:
     
     def __init__(self, tenant_id: str):
         self.tenant_id = tenant_id
-        self.spark = get_spark_session()
+        self.w = get_workspace_client()
+        self.settings = get_settings()
+        self.warehouse_id = self.settings.SQL_WAREHOUSE_ID or "4b9b953939869799"
         self.tools = AgentTools(tenant_id)
     
     def analyze_and_decide(
@@ -248,14 +249,25 @@ The Team"""
     
     def _save_decision(self, decision: AgentDecision):
         """Save decision to database"""
-        tool_calls_json = "["
-        for i, tc in enumerate(decision.tool_calls):
-            if i > 0:
-                tool_calls_json += ","
-            tool_calls_json += f"{{'tool_name': '{tc.tool_name}', 'parameters': '{tc.parameters}', 'result': '{tc.result or ''}'}}"
-        tool_calls_json += "]"
+        import json
         
-        self.spark.sql(f"""
+        # Serialize tool_calls to JSON
+        tool_calls_list = []
+        for tc in decision.tool_calls:
+            tool_calls_list.append({
+                'tool_name': tc.tool_name,
+                'parameters': tc.parameters,
+                'result': tc.result or ''
+            })
+        tool_calls_json = json.dumps(tool_calls_list).replace("'", "''")
+        
+        # Escape single quotes in strings
+        message_subject = decision.message_subject.replace("'", "''") if decision.message_subject else None
+        message_body = decision.message_body.replace("'", "''") if decision.message_body else None
+        reasoning_summary = decision.reasoning_summary.replace("'", "''") if decision.reasoning_summary else ""
+        reasoning_details = decision.reasoning_details.replace("'", "''") if decision.reasoning_details else None
+        
+        insert_query = f"""
             INSERT INTO cdp_platform.core.agent_decisions
             (decision_id, tenant_id, campaign_id, customer_id, journey_id, timestamp,
              action, channel, message_subject, message_body, reasoning_summary,
@@ -270,15 +282,24 @@ The Team"""
                 current_timestamp(),
                 '{decision.action}',
                 {'NULL' if not decision.channel else "'" + decision.channel + "'"},
-                {'NULL' if not decision.message_subject else "'" + decision.message_subject.replace("'", "\\'") + "'"},
-                {'NULL' if not decision.message_body else "'" + decision.message_body.replace("'", "\\'") + "'"},
-                '{decision.reasoning_summary.replace("'", "\\'")}',
-                {'NULL' if not decision.reasoning_details else "'" + decision.reasoning_details.replace("'", "\\'") + "'"},
+                {'NULL' if not message_subject else "'" + message_subject + "'"},
+                {'NULL' if not message_body else "'" + message_body + "'"},
+                '{reasoning_summary}',
+                {'NULL' if not reasoning_details else "'" + reasoning_details + "'"},
                 {decision.confidence_score},
                 {'NULL' if not decision.customer_segment else "'" + decision.customer_segment + "'"},
-                {'NULL' if not decision.churn_risk else str(decision.churn_risk)},
+                {'NULL' if decision.churn_risk is None else str(decision.churn_risk)},
                 '{decision.model_version}',
                 {decision.execution_time_ms}
             )
-        """)
+        """
+        
+        try:
+            self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=insert_query,
+                wait_timeout="30s"
+            )
+        except Exception as e:
+            print(f"Error saving decision: {e}")
 

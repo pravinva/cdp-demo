@@ -13,9 +13,11 @@ from ..models.journey import (
     JourneyProgressResponse,
     CustomerJourneyState
 )
-from ..dependencies import get_tenant_context, get_spark_session
+from ..dependencies import get_tenant_context, get_workspace_client
 from ..services.journey_orchestrator_service import JourneyOrchestratorService
+from ..config import get_settings
 import uuid
+import json
 
 router = APIRouter()
 
@@ -36,28 +38,46 @@ async def create_journey(
 async def list_journeys(
     tenant_id: str = Depends(get_tenant_context),
     status: Optional[str] = Query(None),
-    spark = Depends(get_spark_session)
+    w = Depends(get_workspace_client)
 ):
     """List all journeys for tenant"""
+    
+    settings = get_settings()
+    warehouse_id = settings.SQL_WAREHOUSE_ID or "4b9b953939869799"
+    
     where_clause = f"tenant_id = '{tenant_id}'"
     if status:
         where_clause += f" AND status = '{status}'"
     
-    result = spark.sql(f"""
+    query = f"""
         SELECT definition_json
         FROM cdp_platform.core.journey_definitions
         WHERE {where_clause}
         ORDER BY created_at DESC
-    """).collect()
+    """
     
     journeys = []
-    for row in result:
-        try:
-            journey = JourneyDefinition.model_validate_json(row['definition_json'])
-            journeys.append(journey)
-        except Exception as e:
-            print(f"Error parsing journey: {e}")
-            continue
+    try:
+        response = w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=query,
+            wait_timeout="30s"
+        )
+        
+        if response.result and response.result.data_array:
+            columns = [col.name for col in response.manifest.schema.columns] if response.manifest and response.manifest.schema else []
+            for row in response.result.data_array:
+                try:
+                    row_dict = {columns[i]: row[i] for i in range(len(columns))}
+                    definition_json = row_dict.get('definition_json')
+                    if definition_json:
+                        journey = JourneyDefinition.model_validate_json(definition_json)
+                        journeys.append(journey)
+                except Exception as e:
+                    print(f"Error parsing journey: {e}")
+                    continue
+    except Exception as e:
+        print(f"Error listing journeys: {e}")
     
     return journeys
 
@@ -160,23 +180,61 @@ async def get_journey_states(
     journey_id: str,
     tenant_id: str = Depends(get_tenant_context),
     status: Optional[str] = Query(None),
-    spark = Depends(get_spark_session)
+    w = Depends(get_workspace_client)
 ):
     """Get all customer journey states for a journey"""
+    
+    settings = get_settings()
+    warehouse_id = settings.SQL_WAREHOUSE_ID or "4b9b953939869799"
+    
     where_clause = f"tenant_id = '{tenant_id}' AND journey_id = '{journey_id}'"
     if status:
         where_clause += f" AND status = '{status}'"
     
-    result = spark.sql(f"""
+    query = f"""
         SELECT *
         FROM cdp_platform.core.customer_journey_states
         WHERE {where_clause}
         ORDER BY entered_at DESC
-    """).collect()
+    """
     
     states = []
-    for row in result:
-        states.append(CustomerJourneyState(**row.asDict()))
+    try:
+        response = w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=query,
+            wait_timeout="30s"
+        )
+        
+        if response.result and response.result.data_array:
+            columns = [col.name for col in response.manifest.schema.columns] if response.manifest and response.manifest.schema else []
+            for row in response.result.data_array:
+                try:
+                    row_dict = {columns[i]: row[i] for i in range(len(columns))}
+                    
+                    # Handle array conversion for steps_completed
+                    if 'steps_completed' in row_dict and isinstance(row_dict['steps_completed'], str):
+                        try:
+                            row_dict['steps_completed'] = json.loads(row_dict['steps_completed'])
+                        except:
+                            row_dict['steps_completed'] = []
+                    
+                    # Handle datetime conversion
+                    from datetime import datetime
+                    for date_col in ['wait_until', 'entered_at', 'last_action_at', 'completed_at']:
+                        if date_col in row_dict and row_dict[date_col]:
+                            if isinstance(row_dict[date_col], str):
+                                try:
+                                    row_dict[date_col] = datetime.fromisoformat(row_dict[date_col].replace('Z', '+00:00'))
+                                except:
+                                    pass
+                    
+                    states.append(CustomerJourneyState(**row_dict))
+                except Exception as e:
+                    print(f"Error parsing journey state: {e}")
+                    continue
+    except Exception as e:
+        print(f"Error getting journey states: {e}")
     
     return states
 

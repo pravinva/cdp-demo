@@ -3,9 +3,8 @@ Graph Query Service - Relationship intelligence queries
 """
 
 from typing import List, Dict, Optional
-from pyspark.sql import SparkSession
-
-from ..dependencies import get_spark_session
+from ..dependencies import get_workspace_client
+from ..config import get_settings
 
 
 class GraphQueryService:
@@ -13,12 +12,14 @@ class GraphQueryService:
     
     def __init__(self, tenant_id: str, use_neptune: bool = False):
         self.tenant_id = tenant_id
-        self.spark = get_spark_session()
+        self.w = get_workspace_client()
+        self.settings = get_settings()
+        self.warehouse_id = self.settings.SQL_WAREHOUSE_ID or "4b9b953939869799"
         self.use_neptune = use_neptune
     
     def get_household_members(self, customer_id: str) -> List[Dict]:
         """Get all customers in same household"""
-        result = self.spark.sql(f"""
+        query = f"""
             SELECT 
                 c2.customer_id,
                 c2.first_name,
@@ -33,7 +34,23 @@ class GraphQueryService:
             AND c1.customer_id = '{customer_id}'
             AND c2.customer_id != c1.customer_id
             AND c1.household_id IS NOT NULL
-        """).collect()
+        """
         
-        return [row.asDict() for row in result]
+        members = []
+        try:
+            response = self.w.statement_execution.execute_statement(
+                warehouse_id=self.warehouse_id,
+                statement=query,
+                wait_timeout="30s"
+            )
+            
+            if response.result and response.result.data_array:
+                columns = [col.name for col in response.manifest.schema.columns] if response.manifest and response.manifest.schema else []
+                for row in response.result.data_array:
+                    row_dict = {columns[i]: row[i] for i in range(len(columns))}
+                    members.append(row_dict)
+        except Exception as e:
+            print(f"Error getting household members: {e}")
+        
+        return members
 
