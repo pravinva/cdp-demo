@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     DATABRICKS_TOKEN: Optional[str] = None
     DATABRICKS_CATALOG: str = "cdp_platform"
     DATABRICKS_SCHEMA: str = "core"
+    SQL_WAREHOUSE_ID: Optional[str] = None  # SQL warehouse ID for table operations
     
     # Security
     SECRET_KEY: str = "change-me-in-production"
