@@ -19,17 +19,23 @@
   - Journeys API (CRUD + Execution)
   - Agents API (Decisions)
   - Analytics API (Dashboard)
-  - Identity API (Graph queries)
+  - Identity API (Graph queries + Resolution)
 - ✅ Journey Orchestrator service
 - ✅ Agent service with Databricks SDK integration
 - ✅ Multi-channel activation service
+- ✅ Identity Resolution service
+- ✅ Demo data generator script
 - ✅ Configuration supports `~/.databrickscfg`
 
 ### Infrastructure
 - ✅ Databricks App configuration
 - ✅ Dockerfile for containerization
 - ✅ Unity Catalog setup scripts
-- ✅ Workflow definitions
+- ✅ Workflow definitions:
+  - Journey Orchestrator workflow
+  - Identity Resolution workflow
+  - Scheduled Deliveries workflow
+  - Feature Sync workflow
 
 ## 🚀 Quick Start
 
@@ -114,6 +120,8 @@ cdp-demo/
 - ✅ Multi-channel activation (Email, SMS)
 - ✅ Analytics dashboard
 - ✅ Identity graph queries
+- ✅ Identity resolution (match groups, households)
+- ✅ Demo data generation
 - ✅ Databricks Apps deployment ready
 
 **Everything is ready for development and testing!** 🚀
