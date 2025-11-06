@@ -1,12 +1,20 @@
 name: scheduled_deliveries
+description: Process scheduled message deliveries and send them
+
+schedule:
+  quartz_cron_expression: "0 */5 * * * ?"  # Every 5 minutes
+  timezone_id: "UTC"
+
 tasks:
   - task_key: process_scheduled_deliveries
     description: Process scheduled message deliveries from queue
-    python_wheel_task:
-      package_name: cdp_platform
-      entry_point: process_scheduled_deliveries
-    libraries:
-      - whl: ./backend/dist/cdp_platform-*.whl
+    notebook_task:
+      notebook_path: /Workspace/Repos/cdp-demo/backend/scripts/workflows/scheduled_deliveries
+      base_parameters:
+        tenant_id: "demo_tenant"
     max_retries: 2
     timeout_seconds: 1800
+    email_notifications:
+      on_failure:
+        - ${workflow.owner}
 

@@ -1,20 +1,26 @@
 name: journey_orchestrator
-imports:
-  - name: cdp_platform_utils
-    path: ./backend/app
+description: Process customer journey states and advance customers through journeys
+
+schedule:
+  quartz_cron_expression: "0 */5 * * * ?"  # Every 5 minutes
+  timezone_id: "UTC"
 
 tasks:
   - task_key: process_journey_states
     description: Process active journey states and advance customers through journeys
-    python_wheel_task:
-      package_name: cdp_platform
-      entry_point: process_journey_states
-    libraries:
-      - whl: ./backend/dist/cdp_platform-*.whl
+    notebook_task:
+      notebook_path: /Workspace/Repos/cdp-demo/backend/scripts/workflows/journey_orchestrator
+      base_parameters:
+        tenant_id: "demo_tenant"
     max_retries: 2
     timeout_seconds: 3600
+    email_notifications:
+      on_failure:
+        - ${workflow.owner}
+      on_success:
+        - ${workflow.owner}
 
-# Alternative: Direct Python script
+# Alternative: Python wheel task (requires building wheel package)
 # tasks:
 #   - task_key: process_journey_states
 #     python_wheel_task:
@@ -22,4 +28,6 @@ tasks:
 #       entry_point: process_journey_states
 #     libraries:
 #       - whl: ./backend/dist/cdp_platform-*.whl
+#     max_retries: 2
+#     timeout_seconds: 3600
 

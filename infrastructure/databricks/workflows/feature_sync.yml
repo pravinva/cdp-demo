@@ -1,12 +1,20 @@
 name: feature_sync
+description: Sync customer features for ML serving
+
+schedule:
+  quartz_cron_expression: "0 */15 * * * ?"  # Every 15 minutes
+  timezone_id: "UTC"
+
 tasks:
   - task_key: sync_customer_features
     description: Sync customer features for ML serving
-    python_wheel_task:
-      package_name: cdp_platform
-      entry_point: sync_customer_features
-    libraries:
-      - whl: ./backend/dist/cdp_platform-*.whl
+    notebook_task:
+      notebook_path: /Workspace/Repos/cdp-demo/backend/scripts/workflows/feature_sync
+      base_parameters:
+        tenant_id: "demo_tenant"
     max_retries: 2
     timeout_seconds: 3600
+    email_notifications:
+      on_failure:
+        - ${workflow.owner}
 
