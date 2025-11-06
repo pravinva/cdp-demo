@@ -1,6 +1,6 @@
 """
 Create tables using SQL Execution API
-Fixes partition expressions and DEFAULT values for Delta Lake compatibility
+Uses liquid clustering with auto-clustering enabled for optimal performance
 """
 
 from databricks.sdk import WorkspaceClient
@@ -69,11 +69,12 @@ def create_tables_via_sql():
             ingested_at TIMESTAMP
         )
         USING DELTA
-        PARTITIONED BY (tenant_id, to_date(event_timestamp))
+        CLUSTER BY (tenant_id, event_timestamp)
         TBLPROPERTIES (
             'delta.enableChangeDataFeed' = 'true',
             'delta.autoOptimize.optimizeWrite' = 'true',
-            'delta.autoOptimize.autoCompact' = 'true'
+            'delta.autoOptimize.autoCompact' = 'true',
+            'delta.clustering.enabled' = 'true'
         )
         COMMENT 'Raw clickstream events with identity signals'
         """,
@@ -126,9 +127,11 @@ def create_tables_via_sql():
             updated_at TIMESTAMP
         )
         USING DELTA
+        CLUSTER BY (tenant_id)
         TBLPROPERTIES (
             'delta.enableChangeDataFeed' = 'true',
-            'delta.autoOptimize.optimizeWrite' = 'true'
+            'delta.autoOptimize.optimizeWrite' = 'true',
+            'delta.clustering.enabled' = 'true'
         )
         COMMENT 'Customer golden records - unified profiles'
         """,
@@ -168,8 +171,10 @@ def create_tables_via_sql():
             updated_at TIMESTAMP
         )
         USING DELTA
+        CLUSTER BY (tenant_id)
         TBLPROPERTIES (
-            'delta.feature.allowColumnDefaults' = 'supported'
+            'delta.feature.allowColumnDefaults' = 'supported',
+            'delta.clustering.enabled' = 'true'
         )
         COMMENT 'Campaign definitions and performance metrics'
         """,
@@ -196,7 +201,10 @@ def create_tables_via_sql():
             created_at TIMESTAMP
         )
         USING DELTA
-        PARTITIONED BY (tenant_id, to_date(timestamp))
+        CLUSTER BY (tenant_id, timestamp)
+        TBLPROPERTIES (
+            'delta.clustering.enabled' = 'true'
+        )
         COMMENT 'AI agent decisions and reasoning'
         """,
         "deliveries": """
@@ -220,7 +228,10 @@ def create_tables_via_sql():
             created_at TIMESTAMP
         )
         USING DELTA
-        PARTITIONED BY (tenant_id, to_date(sent_at))
+        CLUSTER BY (tenant_id, sent_at)
+        TBLPROPERTIES (
+            'delta.clustering.enabled' = 'true'
+        )
         COMMENT 'Message delivery tracking and engagement metrics'
         """
     }
