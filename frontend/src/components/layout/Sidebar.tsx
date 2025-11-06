@@ -17,6 +17,7 @@ import {
   Route,
   Psychology,
   Analytics,
+  AccountTree,
 } from '@mui/icons-material';
 
 const drawerWidth = 240;
@@ -27,6 +28,7 @@ const menuItems = [
   { text: 'Campaigns', icon: <Campaign />, path: '/campaigns' },
   { text: 'Journeys', icon: <Route />, path: '/journeys' },
   { text: 'Agent Insights', icon: <Psychology />, path: '/agents' },
+  { text: 'Identity Graph', icon: <AccountTree />, path: '/identity' },
 ];
 
 const Sidebar: React.FC = () => {

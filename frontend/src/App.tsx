@@ -9,6 +9,7 @@ import JourneysPage from './pages/JourneysPage';
 import JourneyBuilderPage from './pages/JourneyBuilderPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import AgentInsightsPage from './pages/AgentInsightsPage';
+import IdentityGraphPage from './pages/IdentityGraphPage';
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
         <Route path="/journeys" element={<JourneysPage />} />
         <Route path="/journeys/new" element={<JourneyBuilderPage />} />
         <Route path="/agents" element={<AgentInsightsPage />} />
+        <Route path="/identity" element={<IdentityGraphPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
       </Routes>
     </Layout>
